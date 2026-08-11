@@ -2,29 +2,26 @@
 
 import { useEffect, useRef, useState, KeyboardEvent } from 'react';
 import { useSession, newSession } from '@/hooks/useSession';
-import { useChat, Message } from '@/hooks/useChat';
+import { useChat, Message, SearchStatus } from '@/hooks/useChat';
 
 export default function ChatPage() {
   const sessionId = useSession();
-  const { messages, isLoading, error, sendMessage, loadHistory, clearChat, stopStreaming } = useChat(sessionId);
+  const { messages, isLoading, error, searchStatus, sendMessage, loadHistory, clearChat, stopStreaming } = useChat(sessionId);
   const [input, setInput] = useState('');
   const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [historyLoaded, setHistoryLoaded] = useState(false);
 
-  // Load history once session is ready
   useEffect(() => {
     if (sessionId && !historyLoaded) {
       loadHistory().then(() => setHistoryLoaded(true));
     }
   }, [sessionId, historyLoaded, loadHistory]);
 
-  // Auto-scroll to bottom
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+  }, [messages, searchStatus]);
 
-  // Auto-resize textarea
   useEffect(() => {
     const ta = textareaRef.current;
     if (ta) {
@@ -54,7 +51,7 @@ export default function ChatPage() {
 
   return (
     <div className="flex flex-col h-screen" style={{ background: 'var(--bg)' }}>
-      {/* ── Header ── */}
+      {/* Header */}
       <header
         className="flex items-center justify-between px-5 py-3 border-b shrink-0"
         style={{ borderColor: 'var(--border)', background: 'var(--surface)' }}
@@ -70,7 +67,7 @@ export default function ChatPage() {
             Cozanet OS
           </span>
           <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: 'var(--border)', color: 'var(--muted)' }}>
-            Memory Tool — v0.1
+            Web Search · v0.2
           </span>
         </div>
         <div className="flex items-center gap-2">
@@ -86,14 +83,14 @@ export default function ChatPage() {
             onClick={handleNewSession}
             className="text-xs px-3 py-1.5 rounded-lg transition-colors"
             style={{ color: 'var(--text)', background: 'var(--accent)' }}
-            title="Start a new session (new memory context)"
+            title="Start a new session"
           >
             New session
           </button>
         </div>
       </header>
 
-      {/* ── Messages ── */}
+      {/* Messages */}
       <main className="flex-1 overflow-y-auto px-4 py-6 space-y-4">
         {messages.length === 0 && historyLoaded && (
           <div className="flex flex-col items-center justify-center h-full gap-3 text-center">
@@ -104,7 +101,7 @@ export default function ChatPage() {
               🧠
             </div>
             <p className="text-sm" style={{ color: 'var(--muted)' }}>
-              Memory active — your conversations persist across sessions
+              Ask me anything — I can search the web when you need current info
             </p>
           </div>
         )}
@@ -113,8 +110,18 @@ export default function ChatPage() {
           <ChatMessage key={msg.id} message={msg} />
         ))}
 
+        {/* Search status indicator */}
+        {searchStatus.type === 'searching' && (
+          <SearchIndicator query={searchStatus.query || ''} />
+        )}
+
+        {/* Search results preview */}
+        {searchStatus.type === 'searched' && searchStatus.results && searchStatus.results.length > 0 && (
+          <SearchResultsPreview results={searchStatus.results} />
+        )}
+
         {/* Typing indicator */}
-        {isLoading && messages[messages.length - 1]?.role !== 'assistant' && (
+        {isLoading && messages[messages.length - 1]?.role !== 'assistant' && searchStatus.type === 'idle' && (
           <div className="flex gap-3 message-appear">
             <Avatar role="assistant" />
             <div
@@ -140,7 +147,7 @@ export default function ChatPage() {
         <div ref={bottomRef} />
       </main>
 
-      {/* ── Input ── */}
+      {/* Input */}
       <footer
         className="shrink-0 px-4 py-4 border-t"
         style={{ borderColor: 'var(--border)', background: 'var(--surface)' }}
@@ -186,7 +193,7 @@ export default function ChatPage() {
           )}
         </div>
         <p className="text-center text-xs mt-2" style={{ color: 'var(--muted)' }}>
-          Enter to send · Shift+Enter for newline · Memory persists across sessions
+          Enter to send · Shift+Enter for newline · I search the web only when needed
         </p>
       </footer>
     </div>
@@ -198,17 +205,78 @@ function ChatMessage({ message }: { message: Message }) {
   return (
     <div className={`flex gap-3 message-appear ${isUser ? 'flex-row-reverse' : ''}`}>
       <Avatar role={message.role} />
+      <div className="flex flex-col gap-2 max-w-[75%]">
+        {/* Search results badge */}
+        {message.searched && message.searchResults && message.searchResults.length > 0 && (
+          <div
+            className="flex items-center gap-2 px-3 py-2 rounded-lg text-xs"
+            style={{ background: 'var(--surface)', border: '1px solid var(--border)', color: 'var(--muted)' }}
+          >
+            <SearchIcon />
+            <span>Searched: "{message.searchQuery}"</span>
+          </div>
+        )}
+        <div
+          className={`px-4 py-3 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap ${
+            isUser ? 'rounded-tr-sm' : 'rounded-tl-sm'
+          } ${message.streaming ? 'streaming-cursor' : ''}`}
+          style={{
+            background: isUser ? 'var(--accent)' : 'var(--surface)',
+            color: 'var(--text)',
+            border: isUser ? 'none' : '1px solid var(--border)',
+          }}
+        >
+          {message.content || (message.streaming ? '' : '…')}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SearchIndicator({ query }: { query: string }) {
+  return (
+    <div className="flex gap-3 message-appear">
+      <Avatar role="assistant" />
       <div
-        className={`max-w-[75%] px-4 py-3 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap ${
-          isUser ? 'rounded-tr-sm' : 'rounded-tl-sm'
-        } ${message.streaming ? 'streaming-cursor' : ''}`}
-        style={{
-          background: isUser ? 'var(--accent)' : 'var(--surface)',
-          color: 'var(--text)',
-          border: isUser ? 'none' : '1px solid var(--border)',
-        }}
+        className="px-4 py-3 rounded-2xl rounded-tl-sm flex items-center gap-2.5"
+        style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}
       >
-        {message.content || (message.streaming ? '' : '…')}
+        <div className="flex items-center gap-2">
+          <SearchIcon spinning />
+          <span className="text-sm" style={{ color: 'var(--muted)' }}>
+            Searching the web for "{query}"…
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SearchResultsPreview({ results }: { results: { title: string; url: string }[] }) {
+  return (
+    <div className="flex gap-3 message-appear">
+      <Avatar role="assistant" />
+      <div className="flex flex-col gap-1.5 max-w-[75%]">
+        <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs" style={{ color: 'var(--muted)' }}>
+          <SearchIcon />
+          <span>Found {results.length} results</span>
+        </div>
+        <div className="flex flex-col gap-1">
+          {results.slice(0, 3).map((r, i) => (
+            <a
+              key={i}
+              href={r.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="px-3 py-2 rounded-lg text-xs transition-colors hover:opacity-80"
+              style={{ background: 'var(--surface)', border: '1px solid var(--border)', color: 'var(--muted)' }}
+            >
+              <span style={{ color: 'var(--text)' }}>{r.title}</span>
+              <br />
+              <span className="opacity-60">{r.url}</span>
+            </a>
+          ))}
+        </div>
       </div>
     </div>
   );
@@ -226,5 +294,23 @@ function Avatar({ role }: { role: 'user' | 'assistant' }) {
     >
       {role === 'user' ? 'U' : 'C'}
     </div>
+  );
+}
+
+function SearchIcon({ spinning }: { spinning?: boolean }) {
+  return (
+    <svg
+      className={spinning ? 'animate-spin' : ''}
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      style={{ color: 'var(--accent)' }}
+    >
+      <circle cx="11" cy="11" r="8" />
+      <path d="m21 21-4.3-4.3" />
+    </svg>
   );
 }

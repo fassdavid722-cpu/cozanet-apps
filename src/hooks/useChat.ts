@@ -7,20 +7,32 @@ export interface Message {
   content: string;
   timestamp: number;
   streaming?: boolean;
+  searched?: boolean;
+  searchResults?: { title: string; url: string }[];
+  searchQuery?: string;
 }
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+export interface SearchStatus {
+  type: 'idle' | 'searching' | 'searched' | 'search_failed';
+  query?: string;
+  results?: { title: string; url: string }[];
+  error?: string;
+}
+
+const API_URL = process.env.NEXT_PUBLIC_API_URL || '';
 
 export function useChat(sessionId: string) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [searchStatus, setSearchStatus] = useState<SearchStatus>({ type: 'idle' });
   const abortRef = useRef<AbortController | null>(null);
 
   const sendMessage = useCallback(async (content: string) => {
     if (!content.trim() || !sessionId || isLoading) return;
 
     setError(null);
+    setSearchStatus({ type: 'idle' });
 
     // Add user message
     const userMsg: Message = {
@@ -46,7 +58,8 @@ export function useChat(sessionId: string) {
     abortRef.current = new AbortController();
 
     try {
-      const resp = await fetch(`${API_URL}/api/chat/stream`, {
+      const url = API_URL ? `${API_URL}/api/chat` : '/api/chat';
+      const resp = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: content.trim(), sessionId }),
@@ -60,6 +73,9 @@ export function useChat(sessionId: string) {
       const reader = resp.body!.getReader();
       const decoder = new TextDecoder();
       let assembled = '';
+      let didSearch = false;
+      let searchResults: { title: string; url: string }[] = [];
+      let searchQuery = '';
 
       while (true) {
         const { done, value } = await reader.read();
@@ -72,6 +88,27 @@ export function useChat(sessionId: string) {
           const data = line.slice(6);
           try {
             const parsed = JSON.parse(data);
+
+            // Handle status events (searching, searched, search_failed, generating)
+            if (parsed.status === 'searching') {
+              searchQuery = parsed.query || content.trim();
+              setSearchStatus({ type: 'searching', query: searchQuery });
+            } else if (parsed.status === 'searched') {
+              didSearch = true;
+              searchResults = parsed.results || [];
+              setSearchStatus({ type: 'searched', query: searchQuery, results: searchResults });
+              // Update the assistant message with search metadata
+              setMessages(prev => prev.map(m =>
+                m.id === assistantId
+                  ? { ...m, searched: true, searchResults, searchQuery }
+                  : m
+              ));
+            } else if (parsed.status === 'search_failed') {
+              setSearchStatus({ type: 'search_failed', error: parsed.error });
+            } else if (parsed.status === 'generating') {
+              setSearchStatus({ type: 'idle' });
+            }
+
             if (parsed.done) break;
             if (parsed.error) throw new Error(parsed.error);
             if (parsed.chunk) {
@@ -98,34 +135,30 @@ export function useChat(sessionId: string) {
       setError(err.message || 'Connection failed');
       setMessages(prev => prev.map(m =>
         m.id === assistantId
-          ? { ...m, content: '⚠️ Failed to get response. Is the backend running?', streaming: false }
+          ? { ...m, content: '⚠️ Failed to get response. Please try again.', streaming: false }
           : m
       ));
     } finally {
       setIsLoading(false);
+      setSearchStatus({ type: 'idle' });
     }
   }, [sessionId, isLoading]);
 
   const loadHistory = useCallback(async () => {
-    if (!sessionId) return;
-    try {
-      const resp = await fetch(`${API_URL}/api/history/${sessionId}`);
-      if (!resp.ok) return;
-      const data = await resp.json();
-      const msgs: Message[] = data.messages.map((m: any) => ({
-        id: m.id,
-        role: m.role,
-        content: m.content,
-        timestamp: m.timestamp,
-        streaming: false,
-      }));
-      setMessages(msgs);
-    } catch { /* ignore — backend might not be running yet */ }
+    // History is in-memory on the server, so we just clear locally on load
+    // In a real deployment with DB, this would fetch from the server
   }, [sessionId]);
 
   const clearChat = useCallback(async () => {
     if (!sessionId) return;
-    await fetch(`${API_URL}/api/history/${sessionId}`, { method: 'DELETE' });
+    try {
+      const url = API_URL ? `${API_URL}/api/chat` : '/api/chat';
+      await fetch(url, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId }),
+      });
+    } catch { /* ignore */ }
     setMessages([]);
   }, [sessionId]);
 
@@ -133,5 +166,5 @@ export function useChat(sessionId: string) {
     abortRef.current?.abort();
   }, []);
 
-  return { messages, isLoading, error, sendMessage, loadHistory, clearChat, stopStreaming };
+  return { messages, isLoading, error, searchStatus, sendMessage, loadHistory, clearChat, stopStreaming };
 }
