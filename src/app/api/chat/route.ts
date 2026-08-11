@@ -1,12 +1,13 @@
 /**
- * Chat API Route — Streaming chat with Tavily web search integration.
+ * Chat API Route — Streaming chat with Tavily web search + Supabase memory.
  *
  * Flow:
  *   1. Receive user message
  *   2. Check if message needs web search (intent detection)
  *   3. If yes: stream "searching" status → search Tavily → include results in context
- *   4. Stream LLM response (Groq)
- *   5. Save to session memory
+ *   4. Load conversation history from Supabase (persists across cold starts)
+ *   5. Stream LLM response (Groq)
+ *   6. Save user + assistant messages to Supabase
  */
 
 import { NextRequest } from 'next/server';
@@ -106,8 +107,8 @@ export async function POST(req: NextRequest) {
           }
         }
 
-        // 3. Load conversation history
-        const history = getHistory(sessionId, 20);
+        // 3. Load conversation history from Supabase (async)
+        const history = await getHistory(sessionId, 20);
 
         // 4. Build LLM messages
         const messages = [
@@ -116,7 +117,7 @@ export async function POST(req: NextRequest) {
           { role: 'user', content: message },
         ];
 
-        // 5. Save user message to history
+        // 5. Save user message to Supabase (fire and forget)
         saveMessage(sessionId, 'user', message);
 
         // 6. Send "generating" status
@@ -181,7 +182,7 @@ export async function POST(req: NextRequest) {
           }
         }
 
-        // 8. Save assistant response to history
+        // 8. Save assistant response to Supabase (fire and forget)
         saveMessage(sessionId, 'assistant', fullReply);
 
         // 9. Done
@@ -212,7 +213,7 @@ export async function GET() {
 
 export async function DELETE(req: NextRequest) {
   const { sessionId } = await req.json();
-  if (sessionId) clearSession(sessionId);
+  if (sessionId) await clearSession(sessionId);
   return new Response(JSON.stringify({ success: true }), {
     headers: { 'Content-Type': 'application/json' },
   });
