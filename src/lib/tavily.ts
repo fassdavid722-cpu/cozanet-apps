@@ -1,9 +1,12 @@
 /**
  * Tavily Search Client
  * Provides web search, extract, and crawl capabilities.
+ *
+ * SECURITY: API key must come from environment variable TAVILY_API_KEY.
+ * No hardcoded fallback — if missing, search returns an error.
  */
 
-const TAVILY_API_KEY = process.env.TAVILY_API_KEY || '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';
+const TAVILY_API_KEY = process.env.TAVILY_API_KEY || '';
 const TAVILY_BASE = 'https://api.tavily.com';
 
 export interface TavilySearchResult {
@@ -26,6 +29,10 @@ export async function tavilySearch(
   query: string,
   options: { maxResults?: number; includeAnswer?: boolean } = {}
 ): Promise<TavilySearchResponse> {
+  if (!TAVILY_API_KEY) {
+    throw new Error('TAVILY_API_KEY environment variable is not set. Web search is unavailable.');
+  }
+
   const { maxResults = 5, includeAnswer = true } = options;
 
   const response = await fetch(`${TAVILY_BASE}/search`, {

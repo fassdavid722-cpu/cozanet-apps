@@ -21,6 +21,28 @@ export interface SearchStatus {
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || '';
 
+/**
+ * Load messages from localStorage for a given session.
+ */
+function loadLocalHistory(sessionId: string): Message[] {
+  try {
+    const stored = localStorage.getItem(`cozanet-history-${sessionId}`);
+    if (stored) return JSON.parse(stored);
+  } catch {}
+  return [];
+}
+
+/**
+ * Save messages to localStorage for a given session.
+ */
+function saveLocalHistory(sessionId: string, messages: Message[]) {
+  try {
+    // Only save non-streaming, complete messages
+    const clean = messages.filter(m => !m.streaming);
+    localStorage.setItem(`cozanet-history-${sessionId}`, JSON.stringify(clean));
+  } catch {}
+}
+
 export function useChat(sessionId: string) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -41,7 +63,11 @@ export function useChat(sessionId: string) {
       content: content.trim(),
       timestamp: Date.now(),
     };
-    setMessages(prev => [...prev, userMsg]);
+    setMessages(prev => {
+      const updated = [...prev, userMsg];
+      saveLocalHistory(sessionId, updated);
+      return updated;
+    });
 
     // Add placeholder assistant message (streaming)
     const assistantId = crypto.randomUUID();
@@ -89,7 +115,7 @@ export function useChat(sessionId: string) {
           try {
             const parsed = JSON.parse(data);
 
-            // Handle status events (searching, searched, search_failed, generating)
+            // Handle status events
             if (parsed.status === 'searching') {
               searchQuery = parsed.query || content.trim();
               setSearchStatus({ type: 'searching', query: searchQuery });
@@ -97,7 +123,6 @@ export function useChat(sessionId: string) {
               didSearch = true;
               searchResults = parsed.results || [];
               setSearchStatus({ type: 'searched', query: searchQuery, results: searchResults });
-              // Update the assistant message with search metadata
               setMessages(prev => prev.map(m =>
                 m.id === assistantId
                   ? { ...m, searched: true, searchResults, searchQuery }
@@ -125,19 +150,27 @@ export function useChat(sessionId: string) {
         }
       }
 
-      // Mark streaming complete
-      setMessages(prev => prev.map(m =>
-        m.id === assistantId ? { ...m, streaming: false } : m
-      ));
+      // Mark streaming complete and save to localStorage
+      setMessages(prev => {
+        const updated = prev.map(m =>
+          m.id === assistantId ? { ...m, streaming: false } : m
+        );
+        saveLocalHistory(sessionId, updated);
+        return updated;
+      });
 
     } catch (err: any) {
       if (err.name === 'AbortError') return;
       setError(err.message || 'Connection failed');
-      setMessages(prev => prev.map(m =>
-        m.id === assistantId
-          ? { ...m, content: '⚠️ Failed to get response. Please try again.', streaming: false }
-          : m
-      ));
+      setMessages(prev => {
+        const updated = prev.map(m =>
+          m.id === assistantId
+            ? { ...m, content: '⚠️ Failed to get response. Please try again.', streaming: false }
+            : m
+        );
+        saveLocalHistory(sessionId, updated);
+        return updated;
+      });
     } finally {
       setIsLoading(false);
       setSearchStatus({ type: 'idle' });
@@ -145,12 +178,19 @@ export function useChat(sessionId: string) {
   }, [sessionId, isLoading]);
 
   const loadHistory = useCallback(async () => {
-    // History is in-memory on the server, so we just clear locally on load
-    // In a real deployment with DB, this would fetch from the server
+    // Load from localStorage — survives serverless restarts
+    if (!sessionId) return;
+    const stored = loadLocalHistory(sessionId);
+    if (stored.length > 0) {
+      setMessages(stored);
+    }
   }, [sessionId]);
 
   const clearChat = useCallback(async () => {
     if (!sessionId) return;
+    // Clear localStorage history
+    localStorage.removeItem(`cozanet-history-${sessionId}`);
+    // Also clear server-side if available
     try {
       const url = API_URL ? `${API_URL}/api/chat` : '/api/chat';
       await fetch(url, {
