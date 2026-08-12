@@ -76,7 +76,10 @@ export function useChat(sessionId: string) {
 
     try {
       const url = API_URL ? `${API_URL}/api/chat` : '/api/chat';
-      const resp = await fetch(url, {
+      console.log('[useChat] fetch URL:', url, 'API_URL:', API_URL);
+      let resp;
+      try {
+        resp = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: content.trim(), sessionId }),
@@ -84,6 +87,10 @@ export function useChat(sessionId: string) {
       });
 
       if (!resp.ok) throw new Error(`Server error: ${resp.status}`);
+      } catch (fetchErr) {
+        console.error('[useChat] fetch FAILED:', fetchErr.name, fetchErr.message, 'url:', url);
+        throw fetchErr;
+      }
 
       const reader = resp.body!.getReader();
       const decoder = new TextDecoder();
@@ -185,6 +192,7 @@ export function useChat(sessionId: string) {
     localStorage.removeItem(`cozanet-history-${sessionId}`);
     try {
       const url = API_URL ? `${API_URL}/api/chat` : '/api/chat';
+      console.log('[useChat] fetch URL:', url, 'API_URL:', API_URL);
       await fetch(url, {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
