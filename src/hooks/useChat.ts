@@ -62,40 +62,29 @@ export function useChat(sessionId: string) {
     });
 
     const assistantId = crypto.randomUUID();
-    const assistantMsg: Message = {
+    setMessages(prev => [...prev, {
       id: assistantId,
       role: 'assistant',
       content: '',
       timestamp: Date.now(),
       streaming: true,
-    };
-    setMessages(prev => [...prev, assistantMsg]);
+    }]);
     setIsLoading(true);
-
-    abortRef.current = new AbortController();
 
     try {
       const url = API_URL ? `${API_URL}/api/chat` : '/api/chat';
-      console.log('[useChat] fetch URL:', url, 'API_URL:', API_URL);
-      let resp;
-      try {
-        resp = await fetch(url, {
+      const resp = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: content.trim(), sessionId }),
-        signal: abortRef.current.signal,
       });
 
       if (!resp.ok) throw new Error(`Server error: ${resp.status}`);
-      } catch (fetchErr) {
-        console.error('[useChat] fetch FAILED:', fetchErr.name, fetchErr.message, 'url:', url);
-        throw fetchErr;
-      }
+      if (!resp.body) throw new Error('No response body');
 
-      const reader = resp.body!.getReader();
+      const reader = resp.body.getReader();
       const decoder = new TextDecoder();
 
-      // SSE line buffer: accumulate partial lines across TCP chunks
       let sseBuffer = '';
       let assembled = '';
       let searchResults: { title: string; url: string }[] = [];
@@ -108,7 +97,6 @@ export function useChat(sessionId: string) {
 
         sseBuffer += decoder.decode(value, { stream: true });
 
-        // Split on newlines; last fragment stays in buffer
         const lines = sseBuffer.split('\n');
         sseBuffer = lines.pop() || '';
 
@@ -116,12 +104,10 @@ export function useChat(sessionId: string) {
           const trimmed = line.trim();
           if (!trimmed.startsWith('data: ')) continue;
 
-          const data = trimmed.slice(6);
           let parsed: any;
           try {
-            parsed = JSON.parse(data);
+            parsed = JSON.parse(trimmed.slice(6));
           } catch {
-            // Partial JSON — wait for more data
             continue;
           }
 
@@ -169,7 +155,7 @@ export function useChat(sessionId: string) {
       setMessages(prev => {
         const updated = prev.map(m =>
           m.id === assistantId
-            ? { ...m, content: '⚠️ Error: ' + (err.name || 'Unknown') + ': ' + (err.message || 'No message'), streaming: false }
+            ? { ...m, content: '⚠️ ' + (err.message || 'Failed to get response.'), streaming: false }
             : m
         );
         saveLocalHistory(sessionId, updated);
@@ -192,7 +178,6 @@ export function useChat(sessionId: string) {
     localStorage.removeItem(`cozanet-history-${sessionId}`);
     try {
       const url = API_URL ? `${API_URL}/api/chat` : '/api/chat';
-      console.log('[useChat] fetch URL:', url, 'API_URL:', API_URL);
       await fetch(url, {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
