@@ -21,9 +21,6 @@ export interface SearchStatus {
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || '';
 
-/**
- * Load messages from localStorage for a given session.
- */
 function loadLocalHistory(sessionId: string): Message[] {
   try {
     const stored = localStorage.getItem(`cozanet-history-${sessionId}`);
@@ -32,12 +29,8 @@ function loadLocalHistory(sessionId: string): Message[] {
   return [];
 }
 
-/**
- * Save messages to localStorage for a given session.
- */
 function saveLocalHistory(sessionId: string, messages: Message[]) {
   try {
-    // Only save non-streaming, complete messages
     const clean = messages.filter(m => !m.streaming);
     localStorage.setItem(`cozanet-history-${sessionId}`, JSON.stringify(clean));
   } catch {}
@@ -56,7 +49,6 @@ export function useChat(sessionId: string) {
     setError(null);
     setSearchStatus({ type: 'idle' });
 
-    // Add user message
     const userMsg: Message = {
       id: crypto.randomUUID(),
       role: 'user',
@@ -69,7 +61,6 @@ export function useChat(sessionId: string) {
       return updated;
     });
 
-    // Add placeholder assistant message (streaming)
     const assistantId = crypto.randomUUID();
     const assistantMsg: Message = {
       id: assistantId,
@@ -92,65 +83,71 @@ export function useChat(sessionId: string) {
         signal: abortRef.current.signal,
       });
 
-      if (!resp.ok) {
-        throw new Error(`Server error: ${resp.status}`);
-      }
+      if (!resp.ok) throw new Error(`Server error: ${resp.status}`);
 
       const reader = resp.body!.getReader();
       const decoder = new TextDecoder();
+
+      // SSE line buffer: accumulate partial lines across TCP chunks
+      let sseBuffer = '';
       let assembled = '';
-      let didSearch = false;
       let searchResults: { title: string; url: string }[] = [];
       let searchQuery = '';
+      let streamDone = false;
 
-      while (true) {
+      while (!streamDone) {
         const { done, value } = await reader.read();
         if (done) break;
 
-        const text = decoder.decode(value);
-        const lines = text.split('\n').filter(l => l.startsWith('data: '));
+        sseBuffer += decoder.decode(value, { stream: true });
+
+        // Split on newlines; last fragment stays in buffer
+        const lines = sseBuffer.split('\n');
+        sseBuffer = lines.pop() || '';
 
         for (const line of lines) {
-          const data = line.slice(6);
+          const trimmed = line.trim();
+          if (!trimmed.startsWith('data: ')) continue;
+
+          const data = trimmed.slice(6);
+          let parsed: any;
           try {
-            const parsed = JSON.parse(data);
+            parsed = JSON.parse(data);
+          } catch {
+            // Partial JSON — wait for more data
+            continue;
+          }
 
-            // Handle status events
-            if (parsed.status === 'searching') {
-              searchQuery = parsed.query || content.trim();
-              setSearchStatus({ type: 'searching', query: searchQuery });
-            } else if (parsed.status === 'searched') {
-              didSearch = true;
-              searchResults = parsed.results || [];
-              setSearchStatus({ type: 'searched', query: searchQuery, results: searchResults });
-              setMessages(prev => prev.map(m =>
-                m.id === assistantId
-                  ? { ...m, searched: true, searchResults, searchQuery }
-                  : m
-              ));
-            } else if (parsed.status === 'search_failed') {
-              setSearchStatus({ type: 'search_failed', error: parsed.error });
-            } else if (parsed.status === 'generating') {
-              setSearchStatus({ type: 'idle' });
-            }
+          if (parsed.status === 'searching') {
+            searchQuery = parsed.query || content.trim();
+            setSearchStatus({ type: 'searching', query: searchQuery });
+          } else if (parsed.status === 'searched') {
+            searchResults = parsed.results || [];
+            setSearchStatus({ type: 'searched', query: searchQuery, results: searchResults });
+            setMessages(prev => prev.map(m =>
+              m.id === assistantId
+                ? { ...m, searched: true, searchResults, searchQuery }
+                : m
+            ));
+          } else if (parsed.status === 'search_failed') {
+            setSearchStatus({ type: 'search_failed', error: parsed.error });
+          } else if (parsed.status === 'generating') {
+            setSearchStatus({ type: 'idle' });
+          }
 
-            if (parsed.done) break;
-            if (parsed.error) throw new Error(parsed.error);
-            if (parsed.chunk) {
-              assembled += parsed.chunk;
-              setMessages(prev => prev.map(m =>
-                m.id === assistantId
-                  ? { ...m, content: assembled, streaming: true }
-                  : m
-              ));
-            }
-          } catch (e: any) {
-            if (e.message && !e.message.includes('JSON')) throw e;
+          if (parsed.done) { streamDone = true; break; }
+          if (parsed.error) throw new Error(parsed.error);
+          if (parsed.chunk) {
+            assembled += parsed.chunk;
+            setMessages(prev => prev.map(m =>
+              m.id === assistantId
+                ? { ...m, content: assembled, streaming: true }
+                : m
+            ));
           }
         }
       }
 
-      // Mark streaming complete and save to localStorage
       setMessages(prev => {
         const updated = prev.map(m =>
           m.id === assistantId ? { ...m, streaming: false } : m
@@ -178,19 +175,14 @@ export function useChat(sessionId: string) {
   }, [sessionId, isLoading]);
 
   const loadHistory = useCallback(async () => {
-    // Load from localStorage — survives serverless restarts
     if (!sessionId) return;
     const stored = loadLocalHistory(sessionId);
-    if (stored.length > 0) {
-      setMessages(stored);
-    }
+    if (stored.length > 0) setMessages(stored);
   }, [sessionId]);
 
   const clearChat = useCallback(async () => {
     if (!sessionId) return;
-    // Clear localStorage history
     localStorage.removeItem(`cozanet-history-${sessionId}`);
-    // Also clear server-side if available
     try {
       const url = API_URL ? `${API_URL}/api/chat` : '/api/chat';
       await fetch(url, {
@@ -198,7 +190,7 @@ export function useChat(sessionId: string) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sessionId }),
       });
-    } catch { /* ignore */ }
+    } catch {}
     setMessages([]);
   }, [sessionId]);
 
