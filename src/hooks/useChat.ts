@@ -162,7 +162,7 @@ export function useChat(sessionId: string) {
       setMessages(prev => {
         const updated = prev.map(m =>
           m.id === assistantId
-            ? { ...m, content: '⚠️ Failed to get response. Please try again.', streaming: false }
+            ? { ...m, content: '⚠️ Error: ' + (err.name || 'Unknown') + ': ' + (err.message || 'No message'), streaming: false }
             : m
         );
         saveLocalHistory(sessionId, updated);
