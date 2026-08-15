@@ -10,11 +10,16 @@ export interface Message {
   searched?: boolean;
   searchResults?: { title: string; url: string }[];
   searchQuery?: string;
+  browsed?: boolean;
+  browserUrl?: string;
+  browserTitle?: string;
 }
 
 export interface SearchStatus {
-  type: 'idle' | 'searching' | 'searched' | 'search_failed';
+  type: 'idle' | 'searching' | 'searched' | 'search_failed' | 'browsing' | 'browsed' | 'browse_failed';
   query?: string;
+  url?: string;
+  title?: string;
   results?: { title: string; url: string }[];
   error?: string;
 }
@@ -89,6 +94,8 @@ export function useChat(sessionId: string) {
       let assembled = '';
       let searchResults: { title: string; url: string }[] = [];
       let searchQuery = '';
+      let browserUrl = '';
+      let browserTitle = '';
       let streamDone = false;
 
       while (!streamDone) {
@@ -114,6 +121,19 @@ export function useChat(sessionId: string) {
           if (parsed.status === 'searching') {
             searchQuery = parsed.query || content.trim();
             setSearchStatus({ type: 'searching', query: searchQuery });
+          } else if (parsed.status === 'browsing') {
+            setSearchStatus({ type: 'browsing', url: parsed.url });
+          } else if (parsed.status === 'browsed') {
+            browserUrl = parsed.url;
+            browserTitle = parsed.title || '';
+            setSearchStatus({ type: 'browsed', url: browserUrl, title: browserTitle });
+            setMessages(prev => prev.map(m =>
+              m.id === assistantId
+                ? { ...m, browsed: true, browserUrl, browserTitle }
+                : m
+            ));
+          } else if (parsed.status === 'browse_failed') {
+            setSearchStatus({ type: 'browse_failed', error: parsed.error });
           } else if (parsed.status === 'searched') {
             searchResults = parsed.results || [];
             setSearchStatus({ type: 'searched', query: searchQuery, results: searchResults });

@@ -3,7 +3,7 @@ import './globals.css';
 
 export const metadata: Metadata = {
   title: 'Cozanet OS — AI Assistant',
-  description: 'Next-generation AI-native operating system',
+  description: 'Next-generation AI-native operating system with web search, memory, and browser',
   icons: { icon: '/favicon.ico' },
   openGraph: {
     title: 'Cozanet OS',
