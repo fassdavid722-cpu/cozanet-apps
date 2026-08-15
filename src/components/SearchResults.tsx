@@ -22,12 +22,9 @@ export function SearchResults({ query, results }: SearchResultsProps) {
 
   return (
     <div className="mb-2 slide-up">
-      <div
-        className="flex items-center gap-2 px-3 py-2 rounded-xl cursor-pointer"
-        style={{
-          background: 'rgba(232, 184, 69, 0.04)',
-          border: '1px solid rgba(232, 184, 69, 0.12)',
-        }}
+      <div 
+        className="flex items-center gap-2 px-3 py-2 rounded-lg cursor-pointer"
+        style={{ background: 'rgba(255, 184, 0, 0.05)', border: '1px solid rgba(255, 184, 0, 0.15)' }}
         onClick={() => setExpanded(!expanded)}
       >
         <span className="plugin-badge plugin-badge-search">
@@ -38,23 +35,23 @@ export function SearchResults({ query, results }: SearchResultsProps) {
           Web Search
         </span>
         <span className="text-[13px]" style={{ color: 'var(--text-dim)' }}>
-          {results.length} results for &ldquo;{query}&rdquo;
+          {results.length} results for "{query}"
         </span>
-        <svg
+        <svg 
           width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--text-dim)" strokeWidth="2"
           style={{ marginLeft: 'auto', transform: expanded ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }}
         >
           <polyline points="6 9 12 15 18 9" />
         </svg>
       </div>
-
+      
       {expanded && (
         <div className="mt-2 space-y-2">
           {results.map((r, i) => (
-            <a
-              key={i}
-              href={r.url}
-              target="_blank"
+            <a 
+              key={i} 
+              href={r.url} 
+              target="_blank" 
               rel="noopener noreferrer"
               className="search-result-card block group"
             >
@@ -64,7 +61,7 @@ export function SearchResults({ query, results }: SearchResultsProps) {
                   {domain(r.url)}
                 </span>
               </div>
-              <p className="text-[14px] font-medium transition-colors" style={{ color: 'var(--text)' }}>
+              <p className="text-[14px] font-medium group-hover:text-[var(--coz-gold)] transition-colors" style={{ color: 'var(--text)' }}>
                 {r.title}
               </p>
               <p className="text-[12px] mt-0.5 truncate" style={{ color: 'var(--text-dim)' }}>
