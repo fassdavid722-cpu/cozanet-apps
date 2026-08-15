@@ -18,7 +18,8 @@ export const runtime = 'edge';
 export const dynamic = 'force-dynamic';
 
 const GROQ_API_KEY = process.env.GROQ_API_KEY || '';
-const GROQ_MODEL = process.env.GROQ_MODEL || 'llama-3.3-70b-versatile';
+// Always use 70b model — it supports tool calling and has higher rate limits
+const GROQ_MODEL = 'llama-3.3-70b-versatile';
 
 const SYSTEM_PROMPT = `You are Cozanet OS — a next-generation AI assistant and personal AI operating system.
 You are intelligent, helpful, proactive, and concise. You have access to powerful tools and use them when appropriate.
