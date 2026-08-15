@@ -248,9 +248,11 @@ export async function POST(req: NextRequest) {
           // Step 3: Call Groq again with tool results — stream the final response
           send({ status: 'generating' });
 
-          resp = await callGroq(messages, TOOLS, 'none');
+          // Second call: no tools, just generate the final response
+          resp = await callGroq(messages);
           if (!resp.ok || !resp.body) {
-            throw new Error('Groq API error on second call');
+            const errText = await resp.text().catch(() => 'Unknown');
+            throw new Error(`Groq API error on second call: ${resp.status} ${errText}`);
           }
 
           // Stream the final response
