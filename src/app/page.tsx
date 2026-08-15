@@ -93,13 +93,8 @@ export default function ChatPage() {
     window.location.reload();
   };
 
-  const handleSelectConv = (id: string) => {
-    localStorage.setItem('cozanet-session', id);
-    window.location.reload();
-  };
-
   const switchToSession = (id: string) => {
-    localStorage.setItem('cozanet-session', id);
+    localStorage.setItem('cozanet-session-id', id);
     window.location.reload();
   };
 
