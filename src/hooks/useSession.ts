@@ -1,20 +1,20 @@
 'use client';
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 
 /**
  * Returns a stable sessionId that persists in localStorage.
+ * Uses lazy initialization so the value is available on first render.
  */
 export function useSession(): string {
-  const [sessionId, setSessionId] = useState<string>('');
-
-  useEffect(() => {
+  const [sessionId] = useState<string>(() => {
+    if (typeof window === 'undefined') return '';
     let id = localStorage.getItem('cozanet-session-id');
     if (!id) {
       id = crypto.randomUUID();
       localStorage.setItem('cozanet-session-id', id);
     }
-    setSessionId(id);
-  }, []);
+    return id;
+  });
 
   return sessionId;
 }
