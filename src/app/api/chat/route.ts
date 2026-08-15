@@ -163,9 +163,9 @@ export async function POST(req: NextRequest) {
         const history = await getHistory(sessionId, 20);
 
         // Build messages for Groq
-        const messages = [
+        const messages: any[] = [
           { role: 'system', content: SYSTEM_PROMPT },
-          ...history.map(m => ({ role: m.role, content: m.content })),
+          ...history.map((m: any) => ({ role: m.role, content: m.content })),
           { role: 'user', content: message },
         ];
 
