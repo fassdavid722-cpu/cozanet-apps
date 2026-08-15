@@ -55,6 +55,10 @@ interface SSEData {
   chunk?: string;
   done?: boolean;
   error?: string;
+  query?: string;
+  results?: { title: string; url: string }[];
+  url?: string;
+  title?: string;
   tool_call?: string;
   tool_result?: string;
   searchResults?: { title: string; url: string }[];
@@ -207,33 +211,34 @@ export async function POST(req: NextRequest) {
               toolArgs = {};
             }
 
-            send({ status: 'tool_calling', toolName });
+            if (toolName === 'web_search' || toolName === 'browser_search') {
+              send({ status: 'searching', query: toolArgs.query || '' });
+            } else if (toolName === 'browser_navigate' || toolName === 'jina_reader') {
+              send({ status: 'browsing', url: toolArgs.url || '' });
+            }
 
             const result = await executeTool(toolName, toolArgs);
 
             // Send tool result to client for UI display
             if (result.display) {
               if (result.display.type === 'search_results' && result.display.items) {
+                // Send 'searching' first so the hook shows the searching indicator
+                send({ status: 'searching', query: toolArgs.query || '' });
                 send({
                   status: 'searched',
-                  searchResults: result.display.items,
-                  toolName,
-                  toolDisplay: result.display,
+                  results: result.display.items,
+                  query: toolArgs.query || '',
                 });
               } else if (result.display.type === 'browser' && result.display.items) {
                 send({
                   status: 'browsed',
-                  browserUrl: result.display.items[0]?.url,
-                  browserTitle: result.display.title,
-                  toolName,
-                  toolDisplay: result.display,
+                  url: result.display.items[0]?.url || '',
+                  title: result.display.title || '',
                 });
+              } else if (result.display.type === 'weather') {
+                send({ status: 'generating' });
               } else {
-                send({
-                  status: 'tool_result',
-                  toolName,
-                  toolDisplay: result.display,
-                });
+                send({ status: 'generating' });
               }
             }
 
