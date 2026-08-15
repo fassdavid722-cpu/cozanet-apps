@@ -124,6 +124,14 @@ export default function ChatPage() {
             </div>
           )}
 
+          {searchStatus.type === 'browsing' && (
+            <div className="flex justify-start">
+              <div className="px-4 py-2 text-[13px] rounded-full" style={{ background: 'var(--bubble-assistant)', color: 'var(--text-dim)' }}>
+                🌐 Browsing {searchStatus.url ? `— ${searchStatus.url}` : "…"}
+              </div>
+            </div>
+          )}
+
           <div ref={bottomRef} />
         </div>
       </main>
