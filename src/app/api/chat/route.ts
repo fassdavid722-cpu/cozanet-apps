@@ -22,7 +22,7 @@ export const dynamic = 'force-dynamic';
 const GROQ_API_KEY = process.env.GROQ_API_KEY || '';
 const GROQ_MODEL = 'llama-3.3-70b-versatile';
 const GROQ_TOOL_MODEL = 'llama-3.1-8b-instant';
-const GROQ_VISION_MODEL = 'meta-llama/llama-4-scout-17b-16e-instruct';
+const GROQ_VISION_MODEL = 'llama-3.2-90b-vision-preview';
 
 const SYSTEM_PROMPT = `You are Cozanet OS — a next-generation AI assistant and personal AI operating system.
 You are Cozanet, an intelligent, helpful, proactive AI assistant. You have access to tools for web search, browsing, weather, calculations, translations, memory, and code execution. Use them when they help you give better answers.
