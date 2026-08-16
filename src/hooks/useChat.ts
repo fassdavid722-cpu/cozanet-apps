@@ -305,11 +305,17 @@ export function useChat(sessionId: string) {
 
     } catch (err: any) {
       if (err.name === 'AbortError') return;
-      setError(err.message || 'Connection failed');
+      let friendly = err.message || 'Connection failed';
+      if (/rate.?limit|429/i.test(friendly)) {
+        friendly = "I'm getting a lot of requests right now — give me a few seconds and try again.";
+      } else if (/Failed to fetch|NetworkError|network/i.test(friendly)) {
+        friendly = "Couldn't reach the server — check your connection and try again.";
+      }
+      setError(friendly);
       setMessages(prev => {
         const updated = prev.map(m =>
           m.id === assistantId
-            ? { ...m, content: '⚠️ ' + (err.message || 'Failed to get response.'), streaming: false }
+            ? { ...m, content: '⚠️ ' + friendly, streaming: false }
             : m
         );
         saveLocalHistory(sessionId, updated);
