@@ -25,7 +25,7 @@ function statusLabel(activity: Activity): string {
     case 'thinking': return 'Thinking…';
     case 'searching': return `Searching for "${activity.detail}"…`;
     case 'searched': return activity.label;
-    case 'browsing': return `Browsing ${activity.url}…`;
+    case 'browsing': return activity.detail ? `${activity.detail} ${activity.url || ''}` : `Browsing ${activity.url || ''}…`;
     case 'browsed': return `Read ${activity.title || activity.url}`;
     case 'screenshot': return 'Captured screenshot';
     case 'weather': return `Checking weather for ${activity.detail}…`;

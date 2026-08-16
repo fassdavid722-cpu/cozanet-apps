@@ -169,8 +169,8 @@ export function useChat(sessionId: string) {
               id: makeActivityId(),
               type: 'browsing',
               label: 'Browsing',
-              detail: parsed.url || '',
-              url: parsed.url,
+              detail: parsed.detail || '',
+              url: parsed.url || '',
               timestamp: Date.now(),
             });
           } else if (parsed.status === 'screenshot') {

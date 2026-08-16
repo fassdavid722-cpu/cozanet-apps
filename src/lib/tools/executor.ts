@@ -108,15 +108,17 @@ function extractPageMetadata(html: string, url: string): {
 
 
 // ── Screenshot Capture ─────────────────────────
-// Uses free screenshot APIs (no API key needed)
+// Uses free screenshot APIs with cache-busting for fresh renders
 // thum.io for primary, WordPress mshots as fallback
 async function captureScreenshot(url: string): Promise<string> {
+  // Cache-bust to force fresh render (not cached version)
+  const cb = Date.now();
   // Primary: thum.io — fast, free, returns PNG directly
-  const thumUrl = `https://image.thum.io/get/wide/${url}`;
+  const thumUrl = `https://image.thum.io/get/wide/width/1200/${url}?cb=${cb}`;
   
   // Verify the screenshot loads (HEAD check)
   try {
-    const resp = await fetch(thumUrl, { method: 'HEAD', signal: AbortSignal.timeout(8000) });
+    const resp = await fetch(thumUrl, { method: 'HEAD', signal: AbortSignal.timeout(10000) });
     if (resp.ok && resp.headers.get('content-type')?.includes('image')) {
       return thumUrl;
     }
@@ -124,7 +126,7 @@ async function captureScreenshot(url: string): Promise<string> {
   
   // Fallback: WordPress mshots (free, slightly slower but reliable)
   const encodedUrl = encodeURIComponent(url);
-  const mshotsUrl = `https://s.wordpress.com/mshots/v1/${encodedUrl}?w=800&h=600`;
+  const mshotsUrl = `https://s.wordpress.com/mshots/v1/${encodedUrl}?w=800&h=600&cb=${cb}`;
   return mshotsUrl;
 }
 

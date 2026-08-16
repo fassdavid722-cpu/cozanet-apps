@@ -3,17 +3,11 @@
  *
  * Flow:
  *   1. Receive user message
- *   2. Call Groq with tools (non-streaming for reliable tool detection)
- *   3. If tools called → execute them, send status updates, capture screenshots
+ *   2. Call Groq with tools (streaming for reliable tool detection)
+ *   3. If tools called → execute them with progressive status updates
+ *      For browsing: navigate → read content → capture screenshot (with delays)
  *   4. Call Groq again with tool results → stream final response
  *   5. Save to Supabase
- *
- * Key fixes:
- * - No double tool execution (screenshot stored from first call)
- * - Screenshot URLs sent to client in SSE events
- * - Correct vision model (llama-3.2-90b-vision-preview)
- * - No duplicate content sends
- * - System prompt forbids narrating tool usage
  */
 
 import { NextRequest } from 'next/server';
@@ -26,7 +20,6 @@ export const dynamic = 'force-dynamic';
 
 const GROQ_API_KEY = process.env.GROQ_API_KEY || '';
 const GROQ_MODEL = 'llama-3.3-70b-versatile';
-const GROQ_TOOL_MODEL = 'llama-3.3-70b-versatile';
 const GROQ_VISION_MODEL = 'meta-llama/llama-3.2-90b-vision-preview';
 
 const SYSTEM_PROMPT = `You are Cozanet, an intelligent personal AI assistant.
@@ -99,10 +92,7 @@ function callGroq(messages: any[], tools?: any[], toolChoice?: string, model?: s
 function buildVisionContent(text: string, images: string[]): any[] {
   const content: any[] = [{ type: 'text', text }];
   for (const img of images) {
-    content.push({
-      type: 'image_url',
-      image_url: { url: img },
-    });
+    content.push({ type: 'image_url', image_url: { url: img } });
   }
   return content;
 }
@@ -141,7 +131,7 @@ async function readStream(resp: Response): Promise<{ content: string; toolCalls:
             const idx = tc.index ?? 0;
             if (!toolCalls[idx]) {
               toolCalls[idx] = {
-                id: tc.id,
+                id: tc.id || `call_${idx}`,
                 type: 'function',
                 function: { name: '', arguments: '' },
               };
@@ -161,37 +151,9 @@ async function readStream(resp: Response): Promise<{ content: string; toolCalls:
   return { content, toolCalls };
 }
 
-async function callGroqNonStream(messages: any[], tools?: any[], model?: string): Promise<{ content: string; toolCalls: any[] }> {
-  const body: any = {
-    model: model || GROQ_MODEL,
-    messages,
-    max_tokens: 2048,
-    temperature: 0.7,
-    stream: false,
-  };
-  if (tools && tools.length > 0) {
-    body.tools = tools;
-    body.tool_choice = 'auto';
-    body.parallel_tool_calls = false;
-  }
-  const resp = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${GROQ_API_KEY}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(body),
-  });
-  if (!resp.ok) {
-    const errText = await resp.text().catch(() => 'Unknown');
-    throw new Error(`Groq API error ${resp.status}: ${errText}`);
-  }
-  const data = await resp.json();
-  const choice = data.choices?.[0];
-  return {
-    content: choice?.message?.content || '',
-    toolCalls: choice?.message?.tool_calls || [],
-  };
+// Check if a tool is a browsing-type tool (needs progressive status)
+function isBrowserTool(name: string): boolean {
+  return ['browser_navigate', 'jina_reader', 'browser_interact'].includes(name);
 }
 
 function getToolStatus(toolName: string, args: any): SSEData {
@@ -242,6 +204,8 @@ export async function POST(req: NextRequest) {
         controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
       };
 
+      const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+
       try {
         const history = await getHistory(sessionId, 20);
 
@@ -265,32 +229,51 @@ export async function POST(req: NextRequest) {
 
         send({ status: 'thinking' });
 
-        // Step 1: Call Groq with tools to detect tool calls
-        const { content: initialContent, toolCalls } = await callGroqNonStream(
+        // Step 1: Call Groq with tools (streaming for reliable function calling)
+        const toolResp = await callGroq(
           messages,
           useVision ? undefined : TOOLS,
-          useVision ? GROQ_VISION_MODEL : GROQ_TOOL_MODEL,
+          'auto',
+          useVision ? GROQ_VISION_MODEL : GROQ_MODEL,
         );
+        if (!toolResp.ok || !toolResp.body) {
+          const errText = await toolResp.text().catch(() => 'Unknown');
+          throw new Error(`Groq API error: ${toolResp.status} ${errText}`);
+        }
+
+        const { content: initialContent, toolCalls } = await readStream(toolResp);
         let content = initialContent;
 
         let resp: Response;
 
-        // Fallback: if model outputted tool calls as text (e.g. <browser_navigate>{...}</browser_navigate>)
+        // Fallback: parse text-based tool calls if API function calling failed
         let parsedToolCalls = toolCalls;
         if (parsedToolCalls.length === 0 && content) {
+          // Match <tool_name>{args}</tool_name> or <function=name>{args}</function>
           const textToolMatch = content.match(/<(\w+)>(\{[\s\S]*?\})<\/\1>/);
           if (textToolMatch) {
             try {
               parsedToolCalls = [{
                 id: 'text-tool-0',
                 type: 'function',
-                function: {
-                  name: textToolMatch[1],
-                  arguments: textToolMatch[2],
-                },
+                function: { name: textToolMatch[1], arguments: textToolMatch[2] },
               }];
-              content = ''; // Clear the text, we'll execute the tool instead
+              content = '';
             } catch {}
+          }
+          // Also try the <function=name>{args} format (Groq's failed_generation format)
+          if (parsedToolCalls.length === 0) {
+            const funcMatch = content.match(/<function=(\w+)>(\{[\s\S]*?\})(?:<\/?function>?|$)/);
+            if (funcMatch) {
+              try {
+                parsedToolCalls = [{
+                  id: 'text-tool-0',
+                  type: 'function',
+                  function: { name: funcMatch[1], arguments: funcMatch[2] },
+                }];
+                content = '';
+              } catch {}
+            }
           }
         }
 
@@ -306,10 +289,7 @@ export async function POST(req: NextRequest) {
             })),
           });
 
-          // Track whether any tool returned a screenshot for vision
-          let capturedScreenshotUrl: string | null = null;
-
-          // Execute each tool ONCE — store results including screenshots
+          // Execute each tool with progressive status updates
           for (const tc of parsedToolCalls) {
             const toolName = tc.function.name;
             let toolArgs: any;
@@ -319,26 +299,28 @@ export async function POST(req: NextRequest) {
               toolArgs = {};
             }
 
-            // Send tool-specific running status
-            send(getToolStatus(toolName, toolArgs));
+            // For browser tools: send progressive status updates with delays
+            if (isBrowserTool(toolName)) {
+              const browseUrl = toolArgs.url || '';
 
-            // Execute tool
-            const result = await executeTool(toolName, toolArgs);
+              // Phase 1: Navigating
+              send({ status: 'browsing', url: browseUrl, detail: 'Navigating…' });
+              await sleep(800);
 
-            // Send result status with display data (including screenshot)
-            if (result.display) {
-              if (result.display.type === 'search_results' && result.display.items) {
-                send({
-                  status: 'searched',
-                  results: result.display.items,
-                  query: toolArgs.query || '',
-                });
-              } else if (result.display.type === 'browser' && result.display.items) {
+              // Phase 2: Execute the tool (fetch page + extract content)
+              send({ status: 'browsing', url: browseUrl, detail: 'Reading page content…' });
+              const result = await executeTool(toolName, toolArgs);
+
+              // Phase 3: Capturing screenshot
+              if (result.display?.type === 'browser') {
+                send({ status: 'browsing', url: browseUrl, detail: 'Capturing screenshot…' });
+                await sleep(600);
+
+                // Send browsed result with screenshot
                 const screenshotUrl = result.display.screenshotUrl || '';
-                if (screenshotUrl) capturedScreenshotUrl = screenshotUrl;
                 send({
                   status: 'browsed',
-                  url: result.display.items[0]?.url || toolArgs.url || '',
+                  url: result.display.items?.[0]?.url || browseUrl,
                   title: result.display.title || '',
                   description: result.display.description || '',
                   excerpt: result.display.excerpt || '',
@@ -346,38 +328,52 @@ export async function POST(req: NextRequest) {
                   siteName: result.display.siteName || '',
                   wordCount: result.display.wordCount || 0,
                   via: result.display.via || 'direct',
-                  screenshotUrl: screenshotUrl || '',
+                  screenshotUrl,
                 });
-                // Also send screenshot as separate event for immediate UI update
                 if (screenshotUrl) {
-                  send({ status: 'screenshot', screenshotUrl, url: toolArgs.url || '' });
+                  send({ status: 'screenshot', screenshotUrl, url: browseUrl });
                 }
               } else {
                 send({ status: 'generating' });
               }
-            } else {
-              send({ status: 'generating' });
-            }
 
-            // Add tool result to messages
-            messages.push({
-              role: 'tool',
-              tool_call_id: tc.id,
-              content: JSON.stringify(result.data),
-            });
+              // Add tool result to messages
+              messages.push({
+                role: 'tool',
+                tool_call_id: tc.id,
+                content: JSON.stringify(result.data),
+              });
+            } else {
+              // Non-browser tools: single status update, no delays
+              send(getToolStatus(toolName, toolArgs));
+              const result = await executeTool(toolName, toolArgs);
+
+              if (result.display) {
+                if (result.display.type === 'search_results' && result.display.items) {
+                  send({
+                    status: 'searched',
+                    results: result.display.items,
+                    query: toolArgs.query || '',
+                  });
+                } else {
+                  send({ status: 'generating' });
+                }
+              } else {
+                send({ status: 'generating' });
+              }
+
+              messages.push({
+                role: 'tool',
+                tool_call_id: tc.id,
+                content: JSON.stringify(result.data),
+              });
+            }
           }
 
           // Step 2: Stream final response with tool results
           send({ status: 'generating' });
 
-          // Use vision model only for user-uploaded images, not for browsing screenshots
-          // Screenshots are shown in the UI for the user; the AI works with text content from tools
-          resp = await callGroq(
-            messages,
-            undefined,
-            'auto',
-            useVision ? GROQ_VISION_MODEL : GROQ_MODEL,
-          );
+          resp = await callGroq(messages, undefined, 'auto', useVision ? GROQ_VISION_MODEL : GROQ_MODEL);
           if (!resp.ok || !resp.body) {
             const errText = await resp.text().catch(() => 'Unknown');
             throw new Error(`Groq API error on second call: ${resp.status} ${errText}`);
@@ -420,10 +416,8 @@ export async function POST(req: NextRequest) {
           send({ status: 'generating' });
 
           if (content) {
-            // Tool model returned content directly — send it once
             send({ chunk: content });
           } else {
-            // Fallback: streaming call with main model
             resp = await callGroq(messages, undefined, 'auto', useVision ? GROQ_VISION_MODEL : GROQ_MODEL);
             if (resp.ok && resp.body) {
               const result2 = await readStream(resp);
