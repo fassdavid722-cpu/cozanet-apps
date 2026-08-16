@@ -20,7 +20,8 @@ export const runtime = 'edge';
 export const dynamic = 'force-dynamic';
 
 const GROQ_API_KEY = process.env.GROQ_API_KEY || '';
-const GROQ_MODEL = 'llama-3.1-8b-instant';
+const GROQ_MODEL = 'llama-3.3-70b-versatile';
+const GROQ_TOOL_MODEL = 'llama-3.1-8b-instant';
 const GROQ_VISION_MODEL = 'meta-llama/llama-4-scout-17b-16e-instruct';
 
 const SYSTEM_PROMPT = `You are Cozanet OS — a next-generation AI assistant and personal AI operating system.
@@ -269,11 +270,11 @@ export async function POST(req: NextRequest) {
         // Step 1: Send thinking status, then call Groq with tools
         send({ status: 'thinking' });
 
-        // Use non-streaming call for tool detection (more reliable with Groq)
+        // Use non-streaming call with tool model for reliable tool detection
         const { content: initialContent, toolCalls } = await callGroqNonStream(
           messages,
           useVision ? undefined : TOOLS,
-          useVision ? GROQ_VISION_MODEL : undefined,
+          useVision ? GROQ_VISION_MODEL : GROQ_TOOL_MODEL,
         );
         let content = initialContent;
 
@@ -378,7 +379,7 @@ export async function POST(req: NextRequest) {
 
           // Second call: no tools, just generate the final response
           // Use vision model if screenshot was captured or user sent images
-          resp = await callGroq(messages, undefined, 'auto', (hasScreenshot || useVision) ? GROQ_VISION_MODEL : undefined);
+          resp = await callGroq(messages, undefined, 'auto', (hasScreenshot || useVision) ? GROQ_VISION_MODEL : GROQ_MODEL);
           if (!resp.ok || !resp.body) {
             const errText = await resp.text().catch(() => 'Unknown');
             throw new Error(`Groq API error on second call: ${resp.status} ${errText}`);
@@ -423,7 +424,7 @@ export async function POST(req: NextRequest) {
             send({ chunk: content });
           } else {
             // Fallback: streaming call without tools
-            let resp = await callGroq(messages, undefined, 'auto', useVision ? GROQ_VISION_MODEL : undefined);
+            let resp = await callGroq(messages, undefined, 'auto', useVision ? GROQ_VISION_MODEL : GROQ_MODEL);
             if (resp.ok && resp.body) {
               const result2 = await readStream(resp);
               content = result2.content;
