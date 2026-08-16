@@ -26,7 +26,7 @@ export const dynamic = 'force-dynamic';
 
 const GROQ_API_KEY = process.env.GROQ_API_KEY || '';
 const GROQ_MODEL = 'llama-3.3-70b-versatile';
-const GROQ_TOOL_MODEL = 'llama-3.1-8b-instant';
+const GROQ_TOOL_MODEL = 'llama-3.3-70b-versatile';
 const GROQ_VISION_MODEL = 'meta-llama/llama-3.2-90b-vision-preview';
 
 const SYSTEM_PROMPT = `You are Cozanet, an intelligent personal AI assistant.
@@ -275,12 +275,31 @@ export async function POST(req: NextRequest) {
 
         let resp: Response;
 
-        if (toolCalls.length > 0) {
+        // Fallback: if model outputted tool calls as text (e.g. <browser_navigate>{...}</browser_navigate>)
+        let parsedToolCalls = toolCalls;
+        if (parsedToolCalls.length === 0 && content) {
+          const textToolMatch = content.match(/<(\w+)>(\{[\s\S]*?\})<\/\1>/);
+          if (textToolMatch) {
+            try {
+              parsedToolCalls = [{
+                id: 'text-tool-0',
+                type: 'function',
+                function: {
+                  name: textToolMatch[1],
+                  arguments: textToolMatch[2],
+                },
+              }];
+              content = ''; // Clear the text, we'll execute the tool instead
+            } catch {}
+          }
+        }
+
+        if (parsedToolCalls.length > 0) {
           // Add assistant message with tool calls
           messages.push({
             role: 'assistant',
             content: content || null,
-            tool_calls: toolCalls.map(tc => ({
+            tool_calls: parsedToolCalls.map(tc => ({
               id: tc.id,
               type: 'function',
               function: { name: tc.function.name, arguments: tc.function.arguments },
@@ -291,7 +310,7 @@ export async function POST(req: NextRequest) {
           let capturedScreenshotUrl: string | null = null;
 
           // Execute each tool ONCE — store results including screenshots
-          for (const tc of toolCalls) {
+          for (const tc of parsedToolCalls) {
             const toolName = tc.function.name;
             let toolArgs: any;
             try {
