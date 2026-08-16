@@ -60,6 +60,7 @@ input::placeholder {
 
 .chat-shell {
   height: 100vh;
+  height: 100dvh;
   display: flex;
   flex-direction: column;
   max-width: 640px;
@@ -304,8 +305,9 @@ input::placeholder {
 
 .chat-input-wrap {
   flex-shrink: 0;
-  padding: 10px 14px 16px;
+  padding: 10px 14px calc(16px + env(safe-area-inset-bottom, 0px));
   background: var(--bg);
+  border-top: 1px solid var(--border);
 }
 
 .pending-images-row {
@@ -347,28 +349,33 @@ input::placeholder {
 
 .input-bar {
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   gap: 8px;
   background: var(--input-bg);
   border: 1px solid var(--border);
   border-radius: 26px;
-  padding: 6px 8px 6px 12px;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+  padding: 8px 8px 8px 12px;
+  box-shadow: 0 1px 6px rgba(0,0,0,0.06);
 }
 
 .icon-btn {
-  width: 34px;
-  height: 34px;
+  width: 40px;
+  height: 40px;
   border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: transparent;
-  border: none;
+  background: var(--bg);
+  border: 1px solid var(--border);
   color: var(--text-dim);
   cursor: pointer;
   flex-shrink: 0;
-  transition: background 0.15s;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.icon-btn:active {
+  background: var(--border);
+  border-color: var(--accent);
 }
 
 .icon-btn:hover {
@@ -389,8 +396,8 @@ input::placeholder {
 }
 
 .send-btn {
-  width: 34px;
-  height: 34px;
+  width: 40px;
+  height: 40px;
   border-radius: 50%;
   display: flex;
   align-items: center;
