@@ -20,6 +20,7 @@ export const dynamic = 'force-dynamic';
 
 const GROQ_API_KEY = process.env.GROQ_API_KEY || '';
 const GROQ_MODEL = 'llama-3.3-70b-versatile';
+const GROQ_TOOL_MODEL = 'llama-3.1-8b-instant';
 const GROQ_VISION_MODEL = 'meta-llama/llama-3.2-90b-vision-preview';
 
 const SYSTEM_PROMPT = `You are Cozanet, an intelligent personal AI assistant.
@@ -229,12 +230,12 @@ export async function POST(req: NextRequest) {
 
         send({ status: 'thinking' });
 
-        // Step 1: Call Groq with tools (streaming for reliable function calling)
+        // Step 1: Call Groq with tools (streaming, 8b model for efficiency)
         const toolResp = await callGroq(
           messages,
           useVision ? undefined : TOOLS,
           'auto',
-          useVision ? GROQ_VISION_MODEL : GROQ_MODEL,
+          useVision ? GROQ_VISION_MODEL : GROQ_TOOL_MODEL,
         );
         if (!toolResp.ok || !toolResp.body) {
           const errText = await toolResp.text().catch(() => 'Unknown');
