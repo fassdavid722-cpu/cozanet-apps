@@ -23,11 +23,11 @@ function formatTime(ts: number) {
 function statusLabel(activity: Activity): string {
   switch (activity.type) {
     case 'thinking': return 'Thinking…';
-    case 'searching': return `Searching the web for "${activity.detail}"…`;
+    case 'searching': return `Searching for "${activity.detail}"…`;
     case 'searched': return activity.label;
     case 'browsing': return `Browsing ${activity.url}…`;
     case 'browsed': return `Read ${activity.title || activity.url}`;
-    case 'screenshot': return 'Captured a screenshot';
+    case 'screenshot': return 'Captured screenshot';
     case 'weather': return `Checking weather for ${activity.detail}…`;
     case 'memory': return activity.label;
     case 'calculating': return `Calculating ${activity.detail}…`;
@@ -60,6 +60,7 @@ export default function ChatPage() {
   const [input, setInput] = useState('');
   const [pendingImages, setPendingImages] = useState<string[]>([]);
   const [historyLoaded, setHistoryLoaded] = useState(false);
+  const [expandedShot, setExpandedShot] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -137,6 +138,10 @@ export default function ChatPage() {
   const lastAssistant = messages[messages.length - 1];
   const isStreamingLast = lastAssistant?.role === 'assistant' && lastAssistant.streaming;
 
+  // Collect all screenshots from current activities
+  const liveScreenshots = currentActivities.filter(a => a.screenshotUrl).map(a => a.screenshotUrl!);
+  const liveShot = liveScreenshots[liveScreenshots.length - 1];
+
   return (
     <div className="chat-shell">
       {/* Header */}
@@ -168,6 +173,9 @@ export default function ChatPage() {
 
         {messages.map((m) => {
           const isLastStreaming = m.streaming && m.id === lastAssistant?.id;
+          // Collect screenshots from this message's activities
+          const msgScreenshots = (m.activities || []).filter(a => a.screenshotUrl).map(a => a.screenshotUrl!);
+
           return (
             <div key={m.id}>
               <div className={`msg-row ${m.role}`}>
@@ -198,7 +206,27 @@ export default function ChatPage() {
                 </div>
               </div>
 
-              {/* Live status line while this message streams */}
+              {/* Screenshot thumbnails from completed browse activities */}
+              {msgScreenshots.length > 0 && m.content && (
+                <div className="msg-row assistant">
+                  <div className="bubble-col">
+                    <div className="shot-strip">
+                      {msgScreenshots.map((shot, i) => (
+                        <div key={i} className="shot-thumb" onClick={() => setExpandedShot(shot)}>
+                          <img src={shot} alt="page screenshot" />
+                          <div className="shot-overlay">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" />
+                            </svg>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Live status + screenshot while streaming */}
               {isLastStreaming && currentActivities.length > 0 && (
                 <div className="msg-row assistant">
                   <div className="bubble-col">
@@ -209,8 +237,8 @@ export default function ChatPage() {
                           {statusLabel(act)}
                         </div>
                         {act.screenshotUrl && (
-                          <div className="status-shot">
-                            <img src={act.screenshotUrl} alt="screenshot" />
+                          <div className="live-shot" onClick={() => setExpandedShot(act.screenshotUrl!)}>
+                            <img src={act.screenshotUrl} alt="browsing screenshot" />
                           </div>
                         )}
                       </div>
@@ -219,7 +247,7 @@ export default function ChatPage() {
                 </div>
               )}
 
-              {/* Typing indicator before first token arrives */}
+              {/* Typing indicator before first token */}
               {isLastStreaming && currentActivities.length === 0 && !m.content && (
                 <div className="msg-row assistant">
                   <div className="typing-row">
@@ -236,6 +264,14 @@ export default function ChatPage() {
           );
         })}
       </div>
+
+      {/* Expanded screenshot modal */}
+      {expandedShot && (
+        <div className="shot-modal" onClick={() => setExpandedShot(null)}>
+          <img src={expandedShot} alt="expanded screenshot" />
+          <div className="shot-modal-close" onClick={(e) => { e.stopPropagation(); setExpandedShot(null); }}>×</div>
+        </div>
+      )}
 
       {/* Input */}
       <div className="chat-input-wrap">

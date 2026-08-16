@@ -138,6 +138,27 @@ function cleanDdgUrl(url: string): string {
   return url;
 }
 
+
+// Build search URL for known sites or generic /search?q=
+function buildSearchUrl(siteUrl: string, query: string): string {
+  const encoded = encodeURIComponent(query);
+  const lower = siteUrl.toLowerCase();
+  if (lower.includes('google')) return `https://www.google.com/search?q=${encoded}`;
+  if (lower.includes('amazon')) return `https://www.amazon.com/s?k=${encoded}`;
+  if (lower.includes('youtube')) return `https://www.youtube.com/results?search_query=${encoded}`;
+  if (lower.includes('twitter') || lower.includes('x.com')) return `https://twitter.com/search?q=${encoded}`;
+  if (lower.includes('reddit')) return `https://www.reddit.com/search/?q=${encoded}`;
+  if (lower.includes('wikipedia')) return `https://en.wikipedia.org/w/index.php?search=${encoded}`;
+  if (lower.includes('github')) return `https://github.com/search?q=${encoded}`;
+  if (lower.includes('linkedin')) return `https://www.linkedin.com/search/results/all/?keywords=${encoded}`;
+  if (lower.includes('ebay')) return `https://www.ebay.com/sch/i.html?_nkw=${encoded}`;
+  if (lower.includes('duckduckgo')) return `https://duckduckgo.com/?q=${encoded}`;
+  if (lower.includes('bing')) return `https://www.bing.com/search?q=${encoded}`;
+  const base = siteUrl.replace(/\/$/, '');
+  return `${base}/search?q=${encoded}`;
+}
+
+
 export interface ToolResult {
   success: boolean;
   data: any;
@@ -311,6 +332,94 @@ export async function executeTool(name: string, args: any): Promise<ToolResult> 
             };
           }
         } catch {}
+        return { success: false, data: { error: err.message } };
+      }
+    }
+
+
+    // ── Browser Interact (search/click/scroll on pages) ──
+    case 'browser_interact': {
+      try {
+        const action = args.action || 'search';
+        let url = args.url;
+        if (!url.startsWith('http')) url = `https://${url}`;
+
+        if (action === 'search') {
+          const query = args.query || args.value || '';
+          const searchUrl = buildSearchUrl(url, query);
+
+          const resp = await fetch(searchUrl, { headers: { 'User-Agent': UA } });
+          if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+
+          const html = await resp.text();
+          const { headings, firstParagraph, content: fullText } = extractStructuredContent(html);
+          const meta = extractPageMetadata(html, searchUrl);
+          const wordCount = fullText.split(/\s+/).length;
+          const links = extractLinks(html).slice(0, 12);
+
+          return {
+            success: true,
+            data: {
+              url: searchUrl, action: 'search', query,
+              title: meta.title, description: meta.description,
+              content: fullText.slice(0, 12000), wordCount,
+              headings: headings.slice(0, 8), firstParagraph, links, via: 'direct',
+            },
+            display: {
+              type: 'browser',
+              title: meta.title || `Search: ${query}`,
+              items: [{ url: searchUrl, title: meta.title || `Search: ${query}` }],
+              description: meta.description,
+              excerpt: firstParagraph.slice(0, 200) || fullText.slice(0, 200),
+              ogImage: meta.ogImage, siteName: meta.siteName,
+              wordCount, via: 'direct',
+              screenshotUrl: await captureScreenshot(searchUrl),
+            },
+          };
+        } else if (action === 'click') {
+          const linkText = args.value || args.text || '';
+          const resp = await fetch(url, { headers: { 'User-Agent': UA } });
+          if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+
+          const html = await resp.text();
+          const links = extractLinks(html);
+          const matched = links.find(l =>
+            l.text.toLowerCase().includes(linkText.toLowerCase()) ||
+            linkText.toLowerCase().includes(l.text.toLowerCase())
+          );
+
+          if (!matched) {
+            return { success: false, data: { error: `No link found matching "${linkText}" on ${url}`, availableLinks: links.slice(0, 10) } };
+          }
+
+          const linkResp = await fetch(matched.url, { headers: { 'User-Agent': UA } });
+          if (!linkResp.ok) throw new Error(`HTTP ${linkResp.status}`);
+          const linkHtml = await linkResp.text();
+          const { headings, firstParagraph, content: fullText } = extractStructuredContent(linkHtml);
+          const meta = extractPageMetadata(linkHtml, matched.url);
+          const wordCount = fullText.split(/\s+/).length;
+
+          return {
+            success: true,
+            data: { url: matched.url, action: 'click', clickedText: matched.text, title: meta.title, content: fullText.slice(0, 12000), wordCount, headings: headings.slice(0, 8), firstParagraph, via: 'direct' },
+            display: {
+              type: 'browser', title: meta.title, items: [{ url: matched.url, title: meta.title }],
+              description: meta.description, excerpt: firstParagraph.slice(0, 200) || fullText.slice(0, 200),
+              ogImage: meta.ogImage, siteName: meta.siteName, wordCount, via: 'direct',
+              screenshotUrl: await captureScreenshot(matched.url),
+            },
+          };
+        } else if (action === 'scroll') {
+          const fullPageShot = `https://image.thum.io/get/fullpage/${url}`;
+          return {
+            success: true,
+            data: { url, action: 'scroll', screenshotUrl: fullPageShot },
+            display: { type: 'browser', title: `Full page: ${url}`, items: [{ url, title: 'Full page screenshot' }], screenshotUrl: fullPageShot, via: 'screenshot' },
+          };
+        }
+
+        return { success: false, data: { error: `Unknown action: ${action}` } };
+      } catch (err: any) {
         return { success: false, data: { error: err.message } };
       }
     }

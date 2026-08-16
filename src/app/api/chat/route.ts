@@ -1,14 +1,19 @@
 /**
- * Chat API Route — Upgraded with rich activity indicators
+ * Chat API Route — Clean, efficient, no wasted calls
  *
  * Flow:
  *   1. Receive user message
- *   2. Send "thinking" status to client
- *   3. Send to Groq with tool definitions
- *   4. If Groq calls a tool → send specific status (searching/browsing/weather/etc)
- *   5. Execute tool → send result status
- *   6. Send "generating" status → stream final response
- *   7. Save to Supabase
+ *   2. Call Groq with tools (non-streaming for reliable tool detection)
+ *   3. If tools called → execute them, send status updates, capture screenshots
+ *   4. Call Groq again with tool results → stream final response
+ *   5. Save to Supabase
+ *
+ * Key fixes:
+ * - No double tool execution (screenshot stored from first call)
+ * - Screenshot URLs sent to client in SSE events
+ * - Correct vision model (llama-3.2-90b-vision-preview)
+ * - No duplicate content sends
+ * - System prompt forbids narrating tool usage
  */
 
 import { NextRequest } from 'next/server';
@@ -22,27 +27,25 @@ export const dynamic = 'force-dynamic';
 const GROQ_API_KEY = process.env.GROQ_API_KEY || '';
 const GROQ_MODEL = 'llama-3.3-70b-versatile';
 const GROQ_TOOL_MODEL = 'llama-3.1-8b-instant';
-const GROQ_VISION_MODEL = 'qwen/qwen3.6-27b';
+const GROQ_VISION_MODEL = 'meta-llama/llama-3.2-90b-vision-preview';
 
-const SYSTEM_PROMPT = `You are Cozanet OS — a next-generation AI assistant and personal AI operating system.
-You are Cozanet, an intelligent, helpful, proactive AI assistant. You have access to tools for web search, browsing, weather, calculations, translations, memory, and code execution. Use them when they help you give better answers.
+const SYSTEM_PROMPT = `You are Cozanet, an intelligent personal AI assistant.
+You have tools for web search, browsing, weather, calculations, translations, memory, and code execution.
 
-RULES:
-1. Use tools when they help answer better. Don't search the web for things you already know.
-2. When using search results, cite sources with [1], [2] notation.
-3. When browsing a page, summarize the key content accurately.
-4. Save important user preferences and facts to memory.
-5. When the user asks about something they may have told you before, recall from memory first.
-6. Be proactive — if you notice something worth remembering, save it.
-7. Keep responses concise unless the user asks for detail.
-8. Format responses with markdown for readability — use code blocks for code, lists for steps, bold for emphasis.
-9. You have VISION capabilities. When the user sends an image, analyze it carefully and describe what you see.
-10. When you browse a URL, a screenshot is automatically captured. You can "see" the page layout, not just read its text.
-8. When browsing, always try to provide a good summary of what you found.
-9. If a direct fetch fails, the system automatically falls back to Jina Reader.
-10. Format responses with markdown for readability — use code blocks for code, lists for steps, bold for emphasis.
-11. You have VISION capabilities. When the user sends an image, analyze it carefully and describe what you see.
-12. When you browse a URL, a screenshot is automatically captured. You can "see" the page layout, not just read its text.
+CRITICAL RULES:
+1. NEVER narrate your process. Don't say "Let me search" or "I need the calculator" or "I have successfully browsed" or "The user wants to know..." — just give the answer directly. Your internal reasoning is not for the user.
+2. NEVER announce which tool you're about to use. Just use it silently and respond with the results.
+3. Use tools only when they genuinely help. Don't search for things you already know. Don't browse when a search would do.
+4. When using search results, cite sources with [1], [2] notation.
+5. When browsing, summarize the key content accurately and concisely.
+6. Save important user preferences and facts to memory automatically — don't ask permission.
+7. When the user asks about something they may have told you before, recall from memory first.
+8. Keep responses concise unless the user asks for detail. Get to the point.
+9. Format with markdown — code blocks for code, lists for steps, bold for emphasis.
+10. You have VISION capabilities. When the user sends an image, analyze it carefully.
+11. If the user asks you to go to a page and search or interact, use browser_interact.
+12. If a direct fetch fails, the system automatically falls back to Jina Reader — don't mention it.
+13. Respond as if you already know everything the tools told you. Don't describe what the tools returned — just use the information to answer.
 
 Current date: ${new Date().toISOString().split('T')[0]}`;
 
@@ -93,11 +96,9 @@ function callGroq(messages: any[], tools?: any[], toolChoice?: string, model?: s
   });
 }
 
-// Build vision message content from text + images
 function buildVisionContent(text: string, images: string[]): any[] {
   const content: any[] = [{ type: 'text', text }];
   for (const img of images) {
-    // img is base64 data URI: data:image/jpeg;base64,...
     content.push({
       type: 'image_url',
       image_url: { url: img },
@@ -160,7 +161,6 @@ async function readStream(resp: Response): Promise<{ content: string; toolCalls:
   return { content, toolCalls };
 }
 
-// Non-streaming call for tool detection (more reliable)
 async function callGroqNonStream(messages: any[], tools?: any[], model?: string): Promise<{ content: string; toolCalls: any[] }> {
   const body: any = {
     model: model || GROQ_MODEL,
@@ -194,7 +194,6 @@ async function callGroqNonStream(messages: any[], tools?: any[], model?: string)
   };
 }
 
-// Tool-specific status mapping
 function getToolStatus(toolName: string, args: any): SSEData {
   switch (toolName) {
     case 'web_search':
@@ -203,6 +202,8 @@ function getToolStatus(toolName: string, args: any): SSEData {
     case 'browser_navigate':
     case 'jina_reader':
       return { status: 'browsing', url: args.url || '' };
+    case 'browser_interact':
+      return { status: 'browsing', url: args.url || '', detail: args.action || '' };
     case 'get_weather':
       return { status: 'weather', location: args.location || '' };
     case 'memory_save':
@@ -242,35 +243,29 @@ export async function POST(req: NextRequest) {
       };
 
       try {
-        // Load conversation history
         const history = await getHistory(sessionId, 20);
 
-        // Build messages for Groq
         const messages: any[] = [
           { role: 'system', content: SYSTEM_PROMPT },
           ...history.map((m: any) => ({ role: m.role, content: m.content })),
           { role: 'user', content: message },
         ];
 
-        // If user sent images, use vision model and attach images
         const hasImages = images && images.length > 0;
         let useVision = hasImages;
 
         if (hasImages) {
-          // Replace the last user message with vision content
           messages[messages.length - 1] = {
             role: 'user',
             content: buildVisionContent(message, images),
           };
         }
 
-        // Save user message
         saveMessage(sessionId, 'user', message);
 
-        // Step 1: Send thinking status, then call Groq with tools
         send({ status: 'thinking' });
 
-        // Use non-streaming call with tool model for reliable tool detection
+        // Step 1: Call Groq with tools to detect tool calls
         const { content: initialContent, toolCalls } = await callGroqNonStream(
           messages,
           useVision ? undefined : TOOLS,
@@ -280,9 +275,8 @@ export async function POST(req: NextRequest) {
 
         let resp: Response;
 
-        // Step 2: If tools were called, execute them with rich status updates
         if (toolCalls.length > 0) {
-          // Add assistant message with tool calls to messages
+          // Add assistant message with tool calls
           messages.push({
             role: 'assistant',
             content: content || null,
@@ -293,7 +287,10 @@ export async function POST(req: NextRequest) {
             })),
           });
 
-          // Execute each tool call with specific status updates
+          // Track whether any tool returned a screenshot for vision
+          let capturedScreenshotUrl: string | null = null;
+
+          // Execute each tool ONCE — store results including screenshots
           for (const tc of toolCalls) {
             const toolName = tc.function.name;
             let toolArgs: any;
@@ -303,13 +300,13 @@ export async function POST(req: NextRequest) {
               toolArgs = {};
             }
 
-            // Send tool-specific "running" status
-            const statusData = getToolStatus(toolName, toolArgs);
-            send(statusData);
+            // Send tool-specific running status
+            send(getToolStatus(toolName, toolArgs));
 
+            // Execute tool
             const result = await executeTool(toolName, toolArgs);
 
-            // Send tool result status for UI display
+            // Send result status with display data (including screenshot)
             if (result.display) {
               if (result.display.type === 'search_results' && result.display.items) {
                 send({
@@ -318,6 +315,8 @@ export async function POST(req: NextRequest) {
                   query: toolArgs.query || '',
                 });
               } else if (result.display.type === 'browser' && result.display.items) {
+                const screenshotUrl = result.display.screenshotUrl || '';
+                if (screenshotUrl) capturedScreenshotUrl = screenshotUrl;
                 send({
                   status: 'browsed',
                   url: result.display.items[0]?.url || toolArgs.url || '',
@@ -328,14 +327,12 @@ export async function POST(req: NextRequest) {
                   siteName: result.display.siteName || '',
                   wordCount: result.display.wordCount || 0,
                   via: result.display.via || 'direct',
+                  screenshotUrl: screenshotUrl || '',
                 });
-              } else if (result.display.type === 'weather') {
-                // Weather result — no special UI card, just generating
-                send({ status: 'generating' });
-              } else if (result.display.type === 'memory_saved') {
-                send({ status: 'generating' });
-              } else if (result.display.type === 'memory_recalled') {
-                send({ status: 'generating' });
+                // Also send screenshot as separate event for immediate UI update
+                if (screenshotUrl) {
+                  send({ status: 'screenshot', screenshotUrl, url: toolArgs.url || '' });
+                }
               } else {
                 send({ status: 'generating' });
               }
@@ -343,7 +340,7 @@ export async function POST(req: NextRequest) {
               send({ status: 'generating' });
             }
 
-            // Add tool result to messages for the next Groq call
+            // Add tool result to messages
             messages.push({
               role: 'tool',
               tool_call_id: tc.id,
@@ -351,35 +348,17 @@ export async function POST(req: NextRequest) {
             });
           }
 
-          // Step 3: Call Groq again with tool results — stream the final response
+          // Step 2: Stream final response with tool results
           send({ status: 'generating' });
 
-          // Check if any tool returned a screenshot — if so, use vision model
-          let hasScreenshot = false;
-          for (const tc of toolCalls) {
-            const toolName = tc.function.name;
-            let toolArgs: any;
-            try { toolArgs = JSON.parse(tc.function.arguments || '{}'); } catch { toolArgs = {}; }
-            if (['browser_navigate', 'jina_reader'].includes(toolName)) {
-              const result = await executeTool(toolName, toolArgs);
-              if (result.display?.screenshotUrl) {
-                hasScreenshot = true;
-                send({ status: 'screenshot', screenshotUrl: result.display.screenshotUrl, url: toolArgs.url || '' });
-                // Add screenshot as a vision message
-                messages.push({
-                  role: 'user',
-                  content: [
-                    { type: 'text', text: `Here is a screenshot of ${toolArgs.url}:` },
-                    { type: 'image_url', image_url: { url: result.display.screenshotUrl } },
-                  ],
-                });
-              }
-            }
-          }
-
-          // Second call: no tools, just generate the final response
-          // Use vision model if screenshot was captured or user sent images
-          resp = await callGroq(messages, undefined, 'auto', (hasScreenshot || useVision) ? GROQ_VISION_MODEL : GROQ_MODEL);
+          // Use vision model only for user-uploaded images, not for browsing screenshots
+          // Screenshots are shown in the UI for the user; the AI works with text content from tools
+          resp = await callGroq(
+            messages,
+            undefined,
+            'auto',
+            useVision ? GROQ_VISION_MODEL : GROQ_MODEL,
+          );
           if (!resp.ok || !resp.body) {
             const errText = await resp.text().catch(() => 'Unknown');
             throw new Error(`Groq API error on second call: ${resp.status} ${errText}`);
@@ -418,42 +397,19 @@ export async function POST(req: NextRequest) {
 
           content = fullReply || content;
         } else {
-          // No tool calls — send the content directly
+          // No tool calls — stream the response directly
           send({ status: 'generating' });
+
           if (content) {
+            // Tool model returned content directly — send it once
             send({ chunk: content });
           } else {
-            // Fallback: streaming call without tools
-            let resp = await callGroq(messages, undefined, 'auto', useVision ? GROQ_VISION_MODEL : GROQ_MODEL);
+            // Fallback: streaming call with main model
+            resp = await callGroq(messages, undefined, 'auto', useVision ? GROQ_VISION_MODEL : GROQ_MODEL);
             if (resp.ok && resp.body) {
               const result2 = await readStream(resp);
               content = result2.content;
               if (content) send({ chunk: content });
-            }
-          }
-
-          if (content) {
-            send({ chunk: content });
-          } else {
-            // Fallback: non-streaming call
-            const fallbackResp = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-              method: 'POST',
-              headers: {
-                'Authorization': `Bearer ${GROQ_API_KEY}`,
-                'Content-Type': 'application/json',
-              },
-              body: JSON.stringify({
-                model: GROQ_MODEL,
-                messages,
-                max_tokens: 2048,
-                temperature: 0.7,
-              }),
-            });
-
-            if (fallbackResp.ok) {
-              const data = await fallbackResp.json();
-              content = data.choices[0].message.content;
-              send({ chunk: content });
             } else {
               content = 'Sorry, I had trouble generating a response. Please try again.';
               send({ chunk: content });
@@ -496,15 +452,18 @@ export async function GET() {
 export async function DELETE(req: NextRequest) {
   const { sessionId } = await req.json();
   if (sessionId) {
-    // Clear from Supabase
     const SUPABASE_URL = process.env.SUPABASE_URL || '';
     const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
-    if (SUPABASE_KEY) {
-      await fetch(
-        `${SUPABASE_URL}/rest/v1/ai_memory?source=eq.${encodeURIComponent(sessionId)}&memory_type=in.(CHAT_USER,CHAT_ASSISTANT)`,
-        { method: 'DELETE', headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } }
-      );
-    }
+    await fetch(
+      `${SUPABASE_URL}/rest/v1/ai_messages?session_id=eq.${sessionId}`,
+      {
+        method: 'DELETE',
+        headers: {
+          'apikey': SUPABASE_KEY,
+          'Authorization': `Bearer ${SUPABASE_KEY}`,
+        },
+      }
+    );
   }
   return new Response(JSON.stringify({ success: true }), {
     headers: { 'Content-Type': 'application/json' },

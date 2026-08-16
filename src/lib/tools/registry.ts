@@ -66,6 +66,24 @@ export const TOOLS: ToolDefinition[] = [
   {
     type: 'function',
     function: {
+      name: 'browser_interact',
+      description: 'Interact with a website by searching, clicking links, or capturing a full-page screenshot. Use action "search" to search on a site (e.g. go to amazon.com and search for headphones), "click" to follow a link by text, or "scroll" for a full-page screenshot.',
+      parameters: {
+        type: 'object',
+        properties: {
+          url: { type: 'string', description: 'The URL to interact with' },
+          action: { type: 'string', enum: ['search', 'click', 'scroll'], description: 'What to do: "search" submits a search query on the site, "click" follows a link, "scroll" captures full-page screenshot' },
+          query: { type: 'string', description: 'Search query (for action=search)' },
+          value: { type: 'string', description: 'Link text to click (for action=click) or search query (for action=search)' },
+          text: { type: 'string', description: 'Alternative to value for click action' },
+        },
+        required: ['url', 'action'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'memory_save',
       description: 'Save a fact, preference, or important information about the user to long-term memory. Use when the user tells you something worth remembering.',
       parameters: {
