@@ -26,6 +26,8 @@ function ActivityIcon({ type }: { type: Activity['type'] }) {
       return <svg {...common}><polyline points="20 6 9 17 4 12"/></svg>;
     case 'weather':
       return <svg {...common}><path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/></svg>;
+    case 'screenshot':
+      return <svg {...common}><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>;
     case 'memory':
       return <svg {...common}><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>;
     case 'calculating':
@@ -43,8 +45,8 @@ function ActivityIcon({ type }: { type: Activity['type'] }) {
 
 /* ── Single activity row ── */
 function ActivityRow({ activity, isLive }: { activity: Activity; isLive?: boolean }) {
-  const isActive = isLive || ['thinking', 'searching', 'browsing', 'calculating', 'translating', 'code_running', 'weather', 'memory'].includes(activity.type);
-  const isDone = ['browsed', 'searched'].includes(activity.type);
+  const isActive = isLive || ['thinking', 'searching', 'browsing', 'calculating', 'translating', 'code_running', 'weather', 'memory', 'screenshot'].includes(activity.type);
+  const isDone = ['browsed', 'searched', 'screenshot'].includes(activity.type);
   const isError = activity.type === 'error';
 
   return (
@@ -126,12 +128,16 @@ function BrowsedCard({ activity }: { activity: Activity }) {
 
   return (
     <div className="activity-card browser-card" style={{ marginTop: 4 }}>
-      {/* og:image thumbnail */}
-      {ogImage && (
+      {/* Use screenshot if available, otherwise og:image */}
+      {activity.screenshotUrl ? (
+        <div className="browser-thumb screenshot-thumb" style={{
+          backgroundImage: `url(${activity.screenshotUrl})`,
+        }} />
+      ) : ogImage ? (
         <div className="browser-thumb" style={{
           backgroundImage: `url(${ogImage})`,
         }} />
-      )}
+      ) : null}
       <div className="browser-info">
         <a
           href={url}
@@ -157,6 +163,43 @@ function BrowsedCard({ activity }: { activity: Activity }) {
   );
 }
 
+/* ── Screenshot card ── */
+function ScreenshotCard({ activity }: { activity: Activity }) {
+  const [loaded, setLoaded] = useState(false);
+  return (
+    <div className="activity-card screenshot-card" style={{ marginTop: 4 }}>
+      <div className="screenshot-wrap">
+        {!loaded && (
+          <div className="screenshot-placeholder">
+            <div className="activity-spinner" style={{ color: 'var(--accent)' }}>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+              </svg>
+            </div>
+          </div>
+        )}
+        <img
+          src={activity.screenshotUrl}
+          alt={`Screenshot of ${activity.url || 'page'}`}
+          className="screenshot-img"
+          style={{ opacity: loaded ? 1 : 0 }}
+          onLoad={() => setLoaded(true)}
+          onError={() => setLoaded(false)}
+        />
+      </div>
+      {activity.url && (
+        <a href={activity.url} target="_blank" rel="noopener noreferrer" className="screenshot-url">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="shrink-0">
+            <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+            <polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>
+          </svg>
+          <span className="truncate">{activity.url}</span>
+        </a>
+      )}
+    </div>
+  );
+}
+
 /* ── Activity feed for a message ── */
 function ActivityFeed({ activities, isLive }: { activities: Activity[]; isLive?: boolean }) {
   if (!activities || activities.length === 0) return null;
@@ -167,6 +210,7 @@ function ActivityFeed({ activities, isLive }: { activities: Activity[]; isLive?:
           <ActivityRow activity={act} isLive={isLive && i === activities.length - 1} />
           {act.type === 'searched' && act.results && <SearchResultsCard results={act.results} />}
           {act.type === 'browsed' && act.url && <BrowsedCard activity={act} />}
+          {act.type === 'screenshot' && act.screenshotUrl && <ScreenshotCard activity={act} />}
         </div>
       ))}
     </div>
@@ -177,6 +221,8 @@ export default function ChatPage() {
   const sessionId = useSession();
   const { messages, isLoading, currentActivities, sendMessage, loadHistory } = useChat(sessionId);
   const [input, setInput] = useState('');
+  const [pendingImages, setPendingImages] = useState<string[]>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [historyLoaded, setHistoryLoaded] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [conversations, setConversations] = useState<Conversation[]>([]);
@@ -238,10 +284,47 @@ export default function ChatPage() {
   }, []);
 
   const handleSend = () => {
-    if (!input.trim() || isLoading) return;
-    sendMessage(input);
+    if ((!input.trim() && pendingImages.length === 0) || isLoading) return;
+    sendMessage(input || 'What do you see in this image?', pendingImages.length > 0 ? pendingImages : undefined);
     setInput('');
+    setPendingImages([]);
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
+  };
+
+  const handleImageUpload = (files: FileList | null) => {
+    if (!files) return;
+    Array.from(files).forEach((file) => {
+      if (!file.type.startsWith('image/')) return;
+      if (file.size > 5 * 1024 * 1024) return; // 5MB limit
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const dataUri = e.target?.result as string;
+        setPendingImages((prev) => [...prev, dataUri]);
+      };
+      reader.readAsDataURL(file);
+    });
+  };
+
+  const handlePaste = (e: React.ClipboardEvent) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (const item of Array.from(items)) {
+      if (item.type.startsWith('image/')) {
+        const file = item.getAsFile();
+        if (file) {
+          const reader = new FileReader();
+          reader.onload = (ev) => {
+            const dataUri = ev.target?.result as string;
+            setPendingImages((prev) => [...prev, dataUri]);
+          };
+          reader.readAsDataURL(file);
+        }
+      }
+    }
+  };
+
+  const removePendingImage = (index: number) => {
+    setPendingImages((prev) => prev.filter((_, i) => i !== index));
   };
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -403,8 +486,18 @@ export default function ChatPage() {
                     <div className="w-8 h-8 rounded-full shrink-0 flex items-center justify-center text-xs font-medium" style={{ background: '#5a5a5a', color: '#fff' }}>
                       U
                     </div>
-                    <div className="flex-1 pt-1 whitespace-pre-wrap break-words md-content text-[15px] leading-relaxed" style={{ color: 'var(--text)' }}>
-                      {m.content}
+                    <div className="flex-1 pt-1 min-w-0">
+                      {/* Uploaded images */}
+                      {m.images && m.images.length > 0 && (
+                        <div className="flex flex-wrap gap-2 mb-2">
+                          {m.images.map((img, i) => (
+                            <img key={i} src={img} alt="upload" className="uploaded-image" />
+                          ))}
+                        </div>
+                      )}
+                      <div className="whitespace-pre-wrap break-words md-content text-[15px] leading-relaxed" style={{ color: 'var(--text)' }}>
+                        {m.content}
+                      </div>
                     </div>
                   </div>
                 ) : (
@@ -462,12 +555,12 @@ export default function ChatPage() {
               />
               <button
                 onClick={handleSend}
-                disabled={!input.trim() || isLoading}
+                disabled={(!input.trim() && pendingImages.length === 0) || isLoading}
                 className="shrink-0 w-8 h-8 rounded-full flex items-center justify-center transition-opacity"
                 style={{
                   background: 'var(--accent)',
                   color: '#fff',
-                  opacity: !input.trim() || isLoading ? 0.4 : 1,
+                  opacity: (!input.trim() && pendingImages.length === 0) || isLoading ? 0.4 : 1,
                 }}
               >
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">

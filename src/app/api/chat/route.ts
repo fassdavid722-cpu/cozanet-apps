@@ -21,6 +21,7 @@ export const dynamic = 'force-dynamic';
 
 const GROQ_API_KEY = process.env.GROQ_API_KEY || '';
 const GROQ_MODEL = 'llama-3.3-70b-versatile';
+const GROQ_VISION_MODEL = 'meta-llama/llama-4-scout-17b-16e-instruct';
 
 const SYSTEM_PROMPT = `You are Cozanet OS — a next-generation AI assistant and personal AI operating system.
 You are intelligent, helpful, proactive, and concise. You have access to powerful tools and use them when appropriate.
@@ -50,6 +51,8 @@ RULES:
 8. When browsing, always try to provide a good summary of what you found.
 9. If a direct fetch fails, the system automatically falls back to Jina Reader.
 10. Format responses with markdown for readability — use code blocks for code, lists for steps, bold for emphasis.
+11. You have VISION capabilities. When the user sends an image, analyze it carefully and describe what you see.
+12. When you browse a URL, a screenshot is automatically captured. You can "see" the page layout, not just read its text.
 
 Current date: ${new Date().toISOString().split('T')[0]}`;
 
@@ -74,11 +77,13 @@ interface SSEData {
   siteName?: string;
   wordCount?: number;
   via?: string;
+  screenshotUrl?: string;
+  image?: string;
 }
 
-function callGroq(messages: any[], tools?: any[], toolChoice?: string) {
+function callGroq(messages: any[], tools?: any[], toolChoice?: string, model?: string) {
   const body: any = {
-    model: GROQ_MODEL,
+    model: model || GROQ_MODEL,
     messages,
     max_tokens: 2048,
     temperature: 0.7,
@@ -96,6 +101,19 @@ function callGroq(messages: any[], tools?: any[], toolChoice?: string) {
     },
     body: JSON.stringify(body),
   });
+}
+
+// Build vision message content from text + images
+function buildVisionContent(text: string, images: string[]): any[] {
+  const content: any[] = [{ type: 'text', text }];
+  for (const img of images) {
+    // img is base64 data URI: data:image/jpeg;base64,...
+    content.push({
+      type: 'image_url',
+      image_url: { url: img },
+    });
+  }
+  return content;
 }
 
 async function readStream(resp: Response): Promise<{ content: string; toolCalls: any[] }> {
@@ -183,7 +201,7 @@ function getToolStatus(toolName: string, args: any): SSEData {
 }
 
 export async function POST(req: NextRequest) {
-  const { message, sessionId } = await req.json();
+  const { message, sessionId, images } = await req.json();
 
   if (!message || !sessionId) {
     return new Response(JSON.stringify({ error: 'message and sessionId required' }), {
@@ -210,13 +228,26 @@ export async function POST(req: NextRequest) {
           { role: 'user', content: message },
         ];
 
+        // If user sent images, use vision model and attach images
+        const hasImages = images && images.length > 0;
+        let useVision = hasImages;
+
+        if (hasImages) {
+          // Replace the last user message with vision content
+          messages[messages.length - 1] = {
+            role: 'user',
+            content: buildVisionContent(message, images),
+          };
+        }
+
         // Save user message
         saveMessage(sessionId, 'user', message);
 
         // Step 1: Send thinking status, then call Groq with tools
         send({ status: 'thinking' });
 
-        let resp = await callGroq(messages, TOOLS);
+        // Use vision model if images are present, otherwise use standard model
+        let resp = await callGroq(messages, useVision ? undefined : TOOLS, 'auto', useVision ? GROQ_VISION_MODEL : undefined);
         if (!resp.ok || !resp.body) {
           const errText = await resp.text().catch(() => 'Unknown');
           throw new Error(`Groq API error ${resp.status}: ${errText}`);
@@ -298,8 +329,32 @@ export async function POST(req: NextRequest) {
           // Step 3: Call Groq again with tool results — stream the final response
           send({ status: 'generating' });
 
+          // Check if any tool returned a screenshot — if so, use vision model
+          let hasScreenshot = false;
+          for (const tc of toolCalls) {
+            const toolName = tc.function.name;
+            let toolArgs: any;
+            try { toolArgs = JSON.parse(tc.function.arguments || '{}'); } catch { toolArgs = {}; }
+            if (['browser_navigate', 'jina_reader'].includes(toolName)) {
+              const result = await executeTool(toolName, toolArgs);
+              if (result.display?.screenshotUrl) {
+                hasScreenshot = true;
+                send({ status: 'screenshot', screenshotUrl: result.display.screenshotUrl, url: toolArgs.url || '' });
+                // Add screenshot as a vision message
+                messages.push({
+                  role: 'user',
+                  content: [
+                    { type: 'text', text: `Here is a screenshot of ${toolArgs.url}:` },
+                    { type: 'image_url', image_url: { url: result.display.screenshotUrl } },
+                  ],
+                });
+              }
+            }
+          }
+
           // Second call: no tools, just generate the final response
-          resp = await callGroq(messages);
+          // Use vision model if screenshot was captured or user sent images
+          resp = await callGroq(messages, undefined, 'auto', (hasScreenshot || useVision) ? GROQ_VISION_MODEL : undefined);
           if (!resp.ok || !resp.body) {
             const errText = await resp.text().catch(() => 'Unknown');
             throw new Error(`Groq API error on second call: ${resp.status} ${errText}`);
@@ -340,6 +395,14 @@ export async function POST(req: NextRequest) {
         } else {
           // No tool calls — stream content directly
           send({ status: 'generating' });
+
+          // If vision was used and content is empty, do a fresh vision call
+          if (useVision && !content) {
+            resp = await callGroq(messages, undefined, 'auto', GROQ_VISION_MODEL);
+            const result2 = await readStream(resp);
+            content = result2.content;
+            if (content) send({ chunk: content });
+          }
 
           if (content) {
             send({ chunk: content });

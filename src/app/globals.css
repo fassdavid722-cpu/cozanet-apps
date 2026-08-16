@@ -237,6 +237,114 @@ html, body {
   color: #7ab8ff;
 }
 
+
+/* ===== Image Upload & Screenshots ===== */
+
+/* Uploaded images in user messages */
+.uploaded-image {
+  max-width: 200px;
+  max-height: 200px;
+  border-radius: 8px;
+  object-fit: cover;
+  border: 1px solid var(--border);
+}
+
+/* Pending images in input area */
+.pending-image-wrap {
+  position: relative;
+}
+
+.pending-image {
+  width: 60px;
+  height: 60px;
+  border-radius: 6px;
+  object-fit: cover;
+  border: 1px solid var(--border);
+}
+
+.pending-image-remove {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #ef4444;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+}
+
+.pending-image-remove:hover {
+  opacity: 0.8;
+}
+
+/* Screenshot card */
+.screenshot-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  margin: 4px 0 8px 24px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.02);
+  animation: fadeIn 0.2s ease-out;
+  max-width: 420px;
+}
+
+.screenshot-wrap {
+  position: relative;
+  width: 100%;
+  min-height: 120px;
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--bg-hover);
+}
+
+.screenshot-img {
+  width: 100%;
+  height: auto;
+  border-radius: 6px;
+  transition: opacity 0.3s ease;
+}
+
+.screenshot-placeholder {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 120px;
+}
+
+/* Use screenshot as browser thumbnail */
+.screenshot-thumb {
+  background-size: cover;
+  background-position: top center;
+}
+
+.screenshot-url {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--muted);
+  text-decoration: none;
+  padding: 2px 4px;
+}
+
+.screenshot-url:hover {
+  color: var(--text-dim);
+}
+
 /* Markdown */
 .md-content p { margin: 0.5em 0; }
 .md-content p:first-child { margin-top: 0; }

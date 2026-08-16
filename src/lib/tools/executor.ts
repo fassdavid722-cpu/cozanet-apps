@@ -106,6 +106,28 @@ function extractPageMetadata(html: string, url: string): {
   return { title, description, ogImage, siteName };
 }
 
+
+// ── Screenshot Capture ─────────────────────────
+// Uses free screenshot APIs (no API key needed)
+// thum.io for primary, WordPress mshots as fallback
+async function captureScreenshot(url: string): Promise<string> {
+  // Primary: thum.io — fast, free, returns PNG directly
+  const thumUrl = `https://image.thum.io/get/wide/${url}`;
+  
+  // Verify the screenshot loads (HEAD check)
+  try {
+    const resp = await fetch(thumUrl, { method: 'HEAD', signal: AbortSignal.timeout(8000) });
+    if (resp.ok && resp.headers.get('content-type')?.includes('image')) {
+      return thumUrl;
+    }
+  } catch {}
+  
+  // Fallback: WordPress mshots (free, slightly slower but reliable)
+  const encodedUrl = encodeURIComponent(url);
+  const mshotsUrl = `https://s.wordpress.com/mshots/v1/${encodedUrl}?w=800&h=600`;
+  return mshotsUrl;
+}
+
 // Clean DuckDuckGo redirect URLs
 function cleanDdgUrl(url: string): string {
   // DDG uses /l/?uddg= redirect links
@@ -130,6 +152,7 @@ export interface ToolResult {
     siteName?: string;
     wordCount?: number;
     via?: string;
+    screenshotUrl?: string;
   };
 }
 
@@ -222,6 +245,7 @@ export async function executeTool(name: string, args: any): Promise<ToolResult> 
                     siteName: meta.siteName,
                     wordCount,
                     via: 'jina-fallback',
+                    screenshotUrl: await captureScreenshot(url),
                   },
                 };
               }
@@ -244,6 +268,7 @@ export async function executeTool(name: string, args: any): Promise<ToolResult> 
             firstParagraph,
             ogImage: meta.ogImage,
             via: 'direct',
+            screenshotUrl: 'captured',
             ...(links.length > 0 && { links }),
           },
           display: {
@@ -256,6 +281,7 @@ export async function executeTool(name: string, args: any): Promise<ToolResult> 
             siteName: meta.siteName,
             wordCount,
             via: 'direct',
+            screenshotUrl: await captureScreenshot(url),
           },
         };
       } catch (err: any) {
@@ -280,6 +306,7 @@ export async function executeTool(name: string, args: any): Promise<ToolResult> 
                 excerpt: content.slice(0, 200).trim(),
                 wordCount,
                 via: 'jina',
+                screenshotUrl: await captureScreenshot(url),
               },
             };
           }
@@ -344,6 +371,7 @@ export async function executeTool(name: string, args: any): Promise<ToolResult> 
             excerpt: content.slice(0, 200).trim(),
             wordCount,
             via: 'jina',
+            screenshotUrl: await captureScreenshot(url),
           },
         };
       } catch (err: any) {

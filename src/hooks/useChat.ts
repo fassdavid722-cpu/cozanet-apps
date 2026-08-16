@@ -3,7 +3,7 @@ import { useState, useCallback, useRef } from 'react';
 
 export interface Activity {
   id: string;
-  type: 'thinking' | 'searching' | 'browsed' | 'searched' | 'browsing' | 'generating' | 'tool' | 'weather' | 'memory' | 'calculating' | 'translating' | 'code_running' | 'error';
+  type: 'thinking' | 'searching' | 'browsed' | 'searched' | 'browsing' | 'generating' | 'tool' | 'weather' | 'memory' | 'calculating' | 'translating' | 'code_running' | 'error' | 'screenshot';
   label: string;
   detail?: string;
   timestamp: number;
@@ -16,6 +16,8 @@ export interface Activity {
   siteName?: string;
   wordCount?: number;
   via?: string;
+  screenshotUrl?: string;
+  images?: string[];
 }
 
 export interface Message {
@@ -25,6 +27,7 @@ export interface Message {
   timestamp: number;
   streaming?: boolean;
   activities?: Activity[];
+  images?: string[];
 }
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || '';
@@ -77,7 +80,7 @@ export function useChat(sessionId: string) {
     ));
   }, []);
 
-  const sendMessage = useCallback(async (content: string) => {
+  const sendMessage = useCallback(async (content: string, images?: string[]) => {
     if (!content.trim() || !sessionId || isLoading) return;
 
     setError(null);
@@ -88,6 +91,7 @@ export function useChat(sessionId: string) {
       role: 'user',
       content: content.trim(),
       timestamp: Date.now(),
+      images: images || undefined,
     };
     setMessages(prev => {
       const updated = [...prev, userMsg];
@@ -111,7 +115,7 @@ export function useChat(sessionId: string) {
       const resp = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: content.trim(), sessionId }),
+        body: JSON.stringify({ message: content.trim(), sessionId, images: images || [] }),
       });
 
       if (!resp.ok) throw new Error(`Server error: ${resp.status}`);
@@ -169,6 +173,17 @@ export function useChat(sessionId: string) {
               url: parsed.url,
               timestamp: Date.now(),
             });
+          } else if (parsed.status === 'screenshot') {
+            if (parsed.screenshotUrl) {
+              addActivity(assistantId, {
+                id: makeActivityId(),
+                type: 'screenshot',
+                label: 'Captured screenshot',
+                url: parsed.url || '',
+                screenshotUrl: parsed.screenshotUrl,
+                timestamp: Date.now(),
+              });
+            }
           } else if (parsed.status === 'browsed') {
             if (parsed.url) {
               addActivity(assistantId, {
@@ -183,6 +198,7 @@ export function useChat(sessionId: string) {
                 siteName: parsed.siteName || '',
                 wordCount: parsed.wordCount || 0,
                 via: parsed.via || 'direct',
+                screenshotUrl: parsed.screenshotUrl || '',
                 timestamp: Date.now(),
               });
             }
