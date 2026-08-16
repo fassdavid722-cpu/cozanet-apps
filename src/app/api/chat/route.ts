@@ -170,6 +170,39 @@ async function readStream(resp: Response): Promise<{ content: string; toolCalls:
   return { content, toolCalls };
 }
 
+// Non-streaming call for tool detection (more reliable)
+async function callGroqNonStream(messages: any[], tools?: any[], model?: string): Promise<{ content: string; toolCalls: any[] }> {
+  const body: any = {
+    model: model || GROQ_MODEL,
+    messages,
+    max_tokens: 2048,
+    temperature: 0.7,
+    stream: false,
+  };
+  if (tools && tools.length > 0) {
+    body.tools = tools;
+    body.tool_choice = 'auto';
+  }
+  const resp = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${GROQ_API_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+  if (!resp.ok) {
+    const errText = await resp.text().catch(() => 'Unknown');
+    throw new Error(`Groq API error ${resp.status}: ${errText}`);
+  }
+  const data = await resp.json();
+  const choice = data.choices?.[0];
+  return {
+    content: choice?.message?.content || '',
+    toolCalls: choice?.message?.tool_calls || [],
+  };
+}
+
 // Tool-specific status mapping
 function getToolStatus(toolName: string, args: any): SSEData {
   switch (toolName) {
@@ -246,14 +279,15 @@ export async function POST(req: NextRequest) {
         // Step 1: Send thinking status, then call Groq with tools
         send({ status: 'thinking' });
 
-        // Use vision model if images are present, otherwise use standard model
-        let resp = await callGroq(messages, useVision ? undefined : TOOLS, 'auto', useVision ? GROQ_VISION_MODEL : undefined);
-        if (!resp.ok || !resp.body) {
-          const errText = await resp.text().catch(() => 'Unknown');
-          throw new Error(`Groq API error ${resp.status}: ${errText}`);
-        }
+        // Use non-streaming call for tool detection (more reliable with Groq)
+        const { content: initialContent, toolCalls } = await callGroqNonStream(
+          messages,
+          useVision ? undefined : TOOLS,
+          useVision ? GROQ_VISION_MODEL : undefined,
+        );
+        let content = initialContent;
 
-        let { content, toolCalls } = await readStream(resp);
+        let resp: Response;
 
         // Step 2: If tools were called, execute them with rich status updates
         if (toolCalls.length > 0) {
@@ -393,15 +427,18 @@ export async function POST(req: NextRequest) {
 
           content = fullReply || content;
         } else {
-          // No tool calls — stream content directly
+          // No tool calls — send the content directly
           send({ status: 'generating' });
-
-          // If vision was used and content is empty, do a fresh vision call
-          if (useVision && !content) {
-            resp = await callGroq(messages, undefined, 'auto', GROQ_VISION_MODEL);
-            const result2 = await readStream(resp);
-            content = result2.content;
-            if (content) send({ chunk: content });
+          if (content) {
+            send({ chunk: content });
+          } else {
+            // Fallback: streaming call without tools
+            let resp = await callGroq(messages, undefined, 'auto', useVision ? GROQ_VISION_MODEL : undefined);
+            if (resp.ok && resp.body) {
+              const result2 = await readStream(resp);
+              content = result2.content;
+              if (content) send({ chunk: content });
+            }
           }
 
           if (content) {
