@@ -1,6 +1,12 @@
 /**
- * Tool Executor — Handles tool calls from the AI.
- * Each function receives its parameters and returns a result.
+ * Tool Executor — Upgraded Browser Engine + Rich Display Data
+ *
+ * Browser upgrades:
+ * - Smart content extraction: headings, paragraphs, metadata
+ * - Auto-fallback to Jina Reader for JS-rendered pages (when content is thin)
+ * - Structured page data: title, description, og:image, word count
+ * - DuckDuckGo URL cleanup (strips redirect wrappers)
+ * - Content summarization: first meaningful paragraph extracted
  */
 
 import { tavilySearch, tavilyExtract, tavilySiteSearch } from '@/lib/tavily';
@@ -12,7 +18,7 @@ function htmlToText(html: string): string {
     .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
     .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
     .replace(/<nav[^>]*>[\s\S]*?<\/nav>/gi, '')
-    .replace(/<footer[^>]*>[\s\S]*?<\/footer>/gi, '')
+    .replace(/<footer[^>]*>[\s\S]*?<footer>/gi, '')
     .replace(/<header[^>]*>[\s\S]*?<\/header>/gi, '')
     .replace(/<[^>]+>/g, ' ')
     .replace(/&nbsp;/g, ' ')
@@ -44,7 +50,70 @@ function extractLinks(html: string): { text: string; url: string }[] {
       links.push({ text: match[2].trim(), url: match[1] });
     }
   }
-  return links.slice(0, 30); // cap at 30 links
+  return links.slice(0, 30);
+}
+
+// Extract structured content from HTML — headings, paragraphs, lists
+function extractStructuredContent(html: string): { headings: string[]; firstParagraph: string; content: string } {
+  // Remove scripts/styles/nav
+  const cleaned = html
+    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+    .replace(/<nav[^>]*>[\s\S]*?<\/nav>/gi, '')
+    .replace(/<footer[^>]*>[\s\S]*?<\/footer>/gi, '')
+    .replace(/<header[^>]*>[\s\S]*?<\/header>/gi, '');
+
+  // Extract headings
+  const headings: string[] = [];
+  const hRegex = /<h[1-3][^>]*>([^<]+)<\/h[1-3]>/gi;
+  let hMatch;
+  while ((hMatch = hRegex.exec(cleaned)) !== null && headings.length < 10) {
+    const text = hMatch[1].trim();
+    if (text.length > 2 && text.length < 200) headings.push(text);
+  }
+
+  // Extract paragraphs
+  const paragraphs: string[] = [];
+  const pRegex = /<p[^>]*>([\s\S]*?)<\/p>/gi;
+  let pMatch;
+  while ((pMatch = pRegex.exec(cleaned)) !== null && paragraphs.length < 50) {
+    const text = pMatch[1].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    if (text.length > 30) paragraphs.push(text);
+  }
+
+  // First meaningful paragraph (first one > 50 chars)
+  const firstParagraph = paragraphs.find(p => p.length > 50) || paragraphs[0] || '';
+
+  // Full text content
+  const content = cleaned.replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'")
+    .replace(/\s+/g, ' ').trim();
+
+  return { headings, firstParagraph, content };
+}
+
+// Extract page metadata for rich display
+function extractPageMetadata(html: string, url: string): {
+  title: string;
+  description: string;
+  ogImage: string;
+  siteName: string;
+} {
+  const title = extractMeta(html, 'og:title') || extractTitle(html) || url;
+  const description = extractMeta(html, 'description') || extractMeta(html, 'og:description') || '';
+  const ogImage = extractMeta(html, 'og:image') || extractMeta(html, 'twitter:image') || '';
+  const siteName = extractMeta(html, 'og:site_name') || '';
+  return { title, description, ogImage, siteName };
+}
+
+// Clean DuckDuckGo redirect URLs
+function cleanDdgUrl(url: string): string {
+  // DDG uses /l/?uddg= redirect links
+  const uddgMatch = url.match(/uddg=([^&]+)/);
+  if (uddgMatch) {
+    try { return decodeURIComponent(uddgMatch[1]); } catch {}
+  }
+  return url;
 }
 
 export interface ToolResult {
@@ -54,6 +123,13 @@ export interface ToolResult {
     type: 'search_results' | 'browser' | 'weather' | 'memory_saved' | 'memory_recalled' | 'calculation' | 'code_output' | 'metadata' | 'translation' | 'time';
     title?: string;
     items?: any[];
+    // New: rich browser display data
+    description?: string;
+    excerpt?: string;
+    ogImage?: string;
+    siteName?: string;
+    wordCount?: number;
+    via?: string;
   };
 }
 
@@ -96,7 +172,7 @@ export async function executeTool(name: string, args: any): Promise<ToolResult> 
       }
     }
 
-    // ── Browser Navigate ────────────────────────
+    // ── Browser Navigate (Upgraded) ─────────────
     case 'browser_navigate': {
       try {
         let url = args.url;
@@ -106,23 +182,80 @@ export async function executeTool(name: string, args: any): Promise<ToolResult> 
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
 
         const html = await resp.text();
-        const text = htmlToText(html);
-        const title = extractTitle(html);
+        const { headings, firstParagraph, content: fullText } = extractStructuredContent(html);
+        const meta = extractPageMetadata(html, url);
+        const text = fullText;
         const links = args.extract_links ? extractLinks(html) : [];
+
+        // If content is too thin (likely JS-rendered), try Jina Reader
+        if (text.length < 200 && !headings.length) {
+          try {
+            const jinaResp = await fetch(`https://r.jina.ai/${url}`, {
+              headers: { 'Accept': 'text/plain' },
+            });
+            if (jinaResp.ok) {
+              const jinaContent = await jinaResp.text();
+              if (jinaContent.length > text.length) {
+                const wordCount = jinaContent.split(/\s+/).length;
+                return {
+                  success: true,
+                  data: {
+                    url,
+                    title: meta.title,
+                    description: meta.description,
+                    content: jinaContent.slice(0, 12000),
+                    contentLength: jinaContent.length,
+                    wordCount,
+                    headings: headings.slice(0, 8),
+                    firstParagraph: jinaContent.split('\n').find((l: string) => l.trim().length > 50) || '',
+                    ogImage: meta.ogImage,
+                    via: 'jina-fallback',
+                    ...(links.length > 0 && { links }),
+                  },
+                  display: {
+                    type: 'browser',
+                    title: meta.title,
+                    items: [{ url, title: meta.title }],
+                    description: meta.description,
+                    excerpt: (jinaContent.slice(0, 200)).trim(),
+                    ogImage: meta.ogImage,
+                    siteName: meta.siteName,
+                    wordCount,
+                    via: 'jina-fallback',
+                  },
+                };
+              }
+            }
+          } catch {}
+        }
+
+        const wordCount = text.split(/\s+/).length;
 
         return {
           success: true,
           data: {
             url,
-            title,
-            content: text.slice(0, 8000),
+            title: meta.title,
+            description: meta.description,
+            content: text.slice(0, 12000),
             contentLength: text.length,
+            wordCount,
+            headings: headings.slice(0, 8),
+            firstParagraph,
+            ogImage: meta.ogImage,
+            via: 'direct',
             ...(links.length > 0 && { links }),
           },
           display: {
             type: 'browser',
-            title,
-            items: [{ url, title }],
+            title: meta.title,
+            items: [{ url, title: meta.title }],
+            description: meta.description,
+            excerpt: firstParagraph.slice(0, 200) || text.slice(0, 200),
+            ogImage: meta.ogImage,
+            siteName: meta.siteName,
+            wordCount,
+            via: 'direct',
           },
         };
       } catch (err: any) {
@@ -135,10 +268,19 @@ export async function executeTool(name: string, args: any): Promise<ToolResult> 
           });
           if (jinaResp.ok) {
             const content = await jinaResp.text();
+            const titleLine = content.split('\n').find((l: string) => l.trim().length > 0) || url;
+            const wordCount = content.split(/\s+/).length;
             return {
               success: true,
-              data: { url, title: url, content: content.slice(0, 8000), contentLength: content.length, via: 'jina' },
-              display: { type: 'browser', title: url, items: [{ url }] },
+              data: { url, title: titleLine, content: content.slice(0, 12000), contentLength: content.length, wordCount, via: 'jina' },
+              display: {
+                type: 'browser',
+                title: titleLine,
+                items: [{ url, title: titleLine }],
+                excerpt: content.slice(0, 200).trim(),
+                wordCount,
+                via: 'jina',
+              },
             };
           }
         } catch {}
@@ -146,7 +288,7 @@ export async function executeTool(name: string, args: any): Promise<ToolResult> 
       }
     }
 
-    // ── Browser Search (DuckDuckGo) ─────────────
+    // ── Browser Search (DuckDuckGo — Upgraded) ──
     case 'browser_search': {
       try {
         const searchUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(args.query)}`;
@@ -158,7 +300,12 @@ export async function executeTool(name: string, args: any): Promise<ToolResult> 
         const resultRegex = /<a[^>]*class="result__a"[^>]*href=["']([^"']+)["'][^>]*>([^<]*)<\/a>[\s\S]*?class="result__snippet"[^>]*>([^<]*)/gi;
         let match;
         while ((match = resultRegex.exec(html)) !== null) {
-          results.push({ title: match[2].trim(), url: match[1].trim(), snippet: match[3].trim() });
+          const cleanUrl = cleanDdgUrl(match[1].trim());
+          results.push({
+            title: match[2].trim(),
+            url: cleanUrl,
+            snippet: match[3].trim().replace(/<[^>]+>/g, ''),
+          });
         }
 
         return {
@@ -175,7 +322,7 @@ export async function executeTool(name: string, args: any): Promise<ToolResult> 
       }
     }
 
-    // ── Jina Reader ─────────────────────────────
+    // ── Jina Reader (Upgraded) ───────────────────
     case 'jina_reader': {
       try {
         let url = args.url;
@@ -185,10 +332,19 @@ export async function executeTool(name: string, args: any): Promise<ToolResult> 
         });
         if (!resp.ok) throw new Error(`Jina Reader failed: ${resp.status}`);
         const content = await resp.text();
+        const titleLine = content.split('\n').find((l: string) => l.trim().length > 0) || url;
+        const wordCount = content.split(/\s+/).length;
         return {
           success: true,
-          data: { url, content: content.slice(0, 8000), contentLength: content.length },
-          display: { type: 'browser', title: url, items: [{ url }] },
+          data: { url, title: titleLine, content: content.slice(0, 12000), contentLength: content.length, wordCount },
+          display: {
+            type: 'browser',
+            title: titleLine,
+            items: [{ url, title: titleLine }],
+            excerpt: content.slice(0, 200).trim(),
+            wordCount,
+            via: 'jina',
+          },
         };
       } catch (err: any) {
         return { success: false, data: { error: err.message } };
@@ -309,12 +465,10 @@ export async function executeTool(name: string, args: any): Promise<ToolResult> 
     case 'calculate': {
       try {
         const expr = args.expression;
-        // Safe eval: only allow math characters and functions
         if (!/^[\d\s+\-*/().%^a-zA-Z,]+$/.test(expr)) {
           throw new Error('Invalid expression');
         }
 
-        // Replace common math functions
         const safeExpr = expr
           .replace(/\^/g, '**')
           .replace(/pi/gi, 'Math.PI')
@@ -380,24 +534,20 @@ export async function executeTool(name: string, args: any): Promise<ToolResult> 
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
 
         const html = await resp.text();
-        const title = extractTitle(html);
-        const description = extractMeta(html, 'description') || extractMeta(html, 'og:description') || '';
-        const ogTitle = extractMeta(html, 'og:title') || title;
-        const ogImage = extractMeta(html, 'og:image') || '';
-        const ogSiteName = extractMeta(html, 'og:site_name') || '';
+        const meta = extractPageMetadata(html, url);
         const twitterCard = extractMeta(html, 'twitter:card') || '';
 
         return {
           success: true,
           data: {
             url,
-            title: ogTitle || title,
-            description,
-            image: ogImage,
-            siteName: ogSiteName,
+            title: meta.title,
+            description: meta.description,
+            image: meta.ogImage,
+            siteName: meta.siteName,
             twitterCard,
           },
-          display: { type: 'metadata', title: ogTitle || title, items: [{ url, description: description.slice(0, 200) }] },
+          display: { type: 'metadata', title: meta.title, items: [{ url, description: meta.description.slice(0, 200) }] },
         };
       } catch (err: any) {
         return { success: false, data: { error: err.message } };
@@ -408,7 +558,6 @@ export async function executeTool(name: string, args: any): Promise<ToolResult> 
     case 'code_run': {
       try {
         const code = args.code;
-        // Capture console.log output
         const logs: string[] = [];
         const mockConsole = {
           log: (...a: any[]) => logs.push(a.map(String).join(' ')),
@@ -423,7 +572,6 @@ export async function executeTool(name: string, args: any): Promise<ToolResult> 
         try {
           result = await fn(mockConsole);
         } catch (e: any) {
-          // If it throws, return the error as part of output
           return {
             success: true,
             data: { logs, error: e.message },
