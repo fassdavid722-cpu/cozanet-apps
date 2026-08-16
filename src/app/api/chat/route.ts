@@ -20,7 +20,7 @@ export const runtime = 'edge';
 export const dynamic = 'force-dynamic';
 
 const GROQ_API_KEY = process.env.GROQ_API_KEY || '';
-const GROQ_MODEL = 'llama-3.3-70b-versatile';
+const GROQ_MODEL = 'llama-3.1-8b-instant';
 const GROQ_VISION_MODEL = 'meta-llama/llama-4-scout-17b-16e-instruct';
 
 const SYSTEM_PROMPT = `You are Cozanet OS — a next-generation AI assistant and personal AI operating system.
@@ -171,6 +171,7 @@ async function callGroqNonStream(messages: any[], tools?: any[], model?: string)
   if (tools && tools.length > 0) {
     body.tools = tools;
     body.tool_choice = 'auto';
+    body.parallel_tool_calls = false;
   }
   const resp = await fetch('https://api.groq.com/openai/v1/chat/completions', {
     method: 'POST',
