@@ -542,12 +542,49 @@ export default function ChatPage() {
         {/* Input */}
         <footer className="shrink-0 pb-4 pt-2">
           <div className="mx-auto w-full max-w-3xl px-4">
+            {/* Pending image previews */}
+            {pendingImages.length > 0 && (
+              <div className="flex gap-2 mb-2 flex-wrap px-2">
+                {pendingImages.map((img, i) => (
+                  <div key={i} className="relative group">
+                    <img src={img} alt="pending" className="w-16 h-16 rounded-lg object-cover" style={{ border: '1px solid var(--border)' }} />
+                    <button
+                      onClick={() => removePendingImage(i)}
+                      className="absolute -top-1 -right-1 w-5 h-5 rounded-full flex items-center justify-center text-xs"
+                      style={{ background: 'var(--text)', color: 'var(--bg)' }}
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
             <div className="flex items-end gap-2 rounded-3xl px-4 py-3" style={{ background: 'var(--input-bg)' }}>
+              {/* Image upload button */}
+              <input
+                type="file"
+                accept="image/*"
+                multiple
+                style={{ display: 'none' }}
+                ref={fileInputRef}
+                onChange={(e) => { handleImageUpload(e.target.files); e.target.value = ''; }}
+              />
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                className="shrink-0 w-8 h-8 rounded-full flex items-center justify-center transition-opacity"
+                style={{ color: 'var(--text-dim)' }}
+                title="Upload image"
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+                </svg>
+              </button>
               <textarea
                 ref={textareaRef}
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}
+                onPaste={handlePaste}
                 placeholder="Message Cozanet…"
                 rows={1}
                 className="flex-1 resize-none outline-none bg-transparent text-[15px] leading-relaxed"
