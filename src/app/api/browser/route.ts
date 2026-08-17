@@ -10,11 +10,17 @@
  *
  * Uses @sparticuz/chromium (serverless-optimized Chromium binary).
  * Runtime: nodejs (NOT edge — Chromium needs Node.js APIs).
+ *
+ * Critical Vercel fixes:
+ *   1. AWS_LAMBDA_JS_RUNTIME=nodejs22.x (set in Vercel Dashboard env vars)
+ *   2. LD_LIBRARY_PATH set to chromium executable directory before launch
+ *   3. setGraphicsMode(false) to prevent GPU-related freezing
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import puppeteer from 'puppeteer-core';
 import chromium from '@sparticuz/chromium';
+import * as path from 'path';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -23,7 +29,22 @@ export const maxDuration = 60;
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
 async function launchBrowser() {
+  // Critical: disable graphics mode (no GPU in serverless)
+  if (typeof (chromium as any).setGraphicsMode === 'function') {
+    (chromium as any).setGraphicsMode(false);
+  }
+
   const executablePath = await chromium.executablePath();
+
+  // CRITICAL: Set LD_LIBRARY_PATH so Chromium can find libnss3.so and libnspr4.so
+  const execDir = path.dirname(executablePath);
+  process.env.LD_LIBRARY_PATH = execDir;
+
+  // Fallback: set AWS_LAMBDA_JS_RUNTIME if not already set in Dashboard
+  if (!process.env.AWS_LAMBDA_JS_RUNTIME) {
+    process.env.AWS_LAMBDA_JS_RUNTIME = 'nodejs22.x';
+  }
+
   const browser = await puppeteer.launch({
     args: chromium.args,
     executablePath,
@@ -88,15 +109,13 @@ export async function POST(req: NextRequest) {
     switch (action) {
       case 'navigate': {
         await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
-        await page.waitForTimeout(1000);
+        await page.waitForTimeout(1500);
         title = await page.title();
         content = await page.evaluate(() => {
-          // Extract readable content from the page
           const removeElements = document.querySelectorAll('script, style, nav, footer, header, iframe, noscript');
           removeElements.forEach(el => el.remove());
           const body = document.body;
           if (!body) return '';
-          // Get text with structure
           const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT);
           const texts: string[] = [];
           let node;
@@ -107,7 +126,6 @@ export async function POST(req: NextRequest) {
           return texts.join('\n').slice(0, 12000);
         });
 
-        // Extract links
         links = await page.evaluate(() => {
           const anchors = document.querySelectorAll('a[href]');
           const results: { text: string; url: string }[] = [];
@@ -121,14 +139,12 @@ export async function POST(req: NextRequest) {
           return results.slice(0, 30);
         });
 
-        // Take screenshot (viewport, not full page for speed)
         const screenshotBuffer = await page.screenshot({ encoding: 'binary', type: 'jpeg', quality: 75 });
         screenshot = `data:image/jpeg;base64,${Buffer.from(screenshotBuffer).toString('base64')}`;
         break;
       }
 
       case 'search': {
-        // Navigate to the site, type in search box, submit
         const searchUrl = buildSearchUrl(url, query || value || '');
         await page.goto(searchUrl, { waitUntil: 'networkidle2', timeout: 30000 });
         await page.waitForTimeout(2000);
@@ -155,7 +171,6 @@ export async function POST(req: NextRequest) {
       }
 
       case 'click': {
-        // Navigate to URL, then click a link matching the text
         await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
         await page.waitForTimeout(1000);
 
@@ -201,7 +216,6 @@ export async function POST(req: NextRequest) {
       }
 
       case 'scroll': {
-        // Full page screenshot
         await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
         await page.waitForTimeout(1000);
         title = await page.title();
