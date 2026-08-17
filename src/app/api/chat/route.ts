@@ -526,7 +526,7 @@ export async function POST(req: NextRequest) {
           const followUpMessages = [
             ...messages,
             { role: 'assistant', content: 'I executed the requested tools. Let me analyze the results.' },
-            { role: 'user', content: `Tool execution results:\n\n${toolResults}\n\nPlease provide a clear response based on these results.` },
+            { role: 'user', content: `The tools have already been executed. Here are the results:\n\n${toolResults}\n\nBased on these results, provide a clear and concise response to the user. Do NOT write or execute any code — the code has already been run and the results are shown above.` },
           ];
 
           // Step 2: Call Groq with results as plain conversation (non-streaming)
@@ -550,7 +550,12 @@ export async function POST(req: NextRequest) {
             throw new Error(`Groq follow-up failed: ${finalResp.status} ${errText}`);
           }
           const finalData = await finalResp.json() as any;
-          content = finalData?.choices?.[0]?.message?.content || '';
+          let rawContent = finalData?.choices?.[0]?.message?.content || '';
+          // Strip Qwen thinking tokens
+          rawContent = rawContent.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+          // Strip leading markdown that might be empty
+          rawContent = rawContent.replace(/^\n+/, '');
+          content = rawContent;
 
           // Send content as chunks for streaming effect
           if (content) {
