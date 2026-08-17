@@ -531,7 +531,7 @@ export async function POST(req: NextRequest) {
 
           // Step 2: Call Groq with results as plain conversation (non-streaming)
           const followUpBody: any = {
-            model: GROQ_TOOL_MODEL,
+            model: 'qwen/qwen3.6-27b',
             messages: followUpMessages,
             max_tokens: 2048,
             temperature: 0.7,
