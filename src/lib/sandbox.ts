@@ -1,88 +1,127 @@
 /**
- * Sandbox — Real Python execution via Pyodide (CDN-loaded) + file system + GitHub + Secrets
+ * Sandbox — Code execution via Piston API + file system + GitHub + Secrets
+ * 
+ * Piston is a free, open-source code execution engine that supports 50+ languages.
+ * Public API: https://emkc.org/api/v2/piston/execute
  */
 
-// ── Pyodide (loaded from CDN at runtime, not bundled) ──
-// We dynamically import from CDN to avoid bundling the 14MB WASM into the serverless function
+// ── Code Execution (Piston API) ──
 
-let pyodideInstance: any = null;
-let pyodidePromise: Promise<any> | null = null;
-
-const PYODIDE_VERSION = '0.26.4';
-const PYODIDE_CDN = `https://cdn.jsdelivr.net/pyodide/v${PYODIDE_VERSION}/full/`;
-
-// Load Pyodide from CDN using fetch + eval to avoid webpack bundling issues
-async function loadPyodideFromCDN(): Promise<any> {
-  // Fetch the Pyodide module source from CDN
-  const resp = await fetch(`${PYODIDE_CDN}pyodide.mjs`);
-  if (!resp.ok) throw new Error(`Failed to fetch Pyodide: ${resp.status}`);
-  const code = await resp.text();
-
-  // Convert ES module to a function we can call
-  // Pyodide's mjs exports loadPyodide as a named export
-  // We eval it in a custom module scope
-  const moduleScope: any = { exports: {} };
-  const moduleFunc = new Function('module', 'exports', 'fetch', 'URL', 'globalThis', code + '\n; return module.exports;');
-  moduleFunc(moduleScope, moduleScope.exports, fetch, URL, globalThis);
-
-  // The module should have set loadPyodide on exports or globalThis
-  const loadPyodide = moduleScope.exports.loadPyodide || (globalThis as any).loadPyodide;
-  if (!loadPyodide) throw new Error('loadPyodide not found after eval');
-
-  const pyodide = await loadPyodide({ indexURL: PYODIDE_CDN });
-  return pyodide;
-}
-
-async function getPyodide(): Promise<any> {
-  if (pyodideInstance) return pyodideInstance;
-  if (pyodidePromise) return pyodidePromise;
-
-  pyodidePromise = loadPyodideFromCDN().then((pyodide: any) => {
-    pyodideInstance = pyodide;
-    return pyodide;
-  });
-
-  return pyodidePromise;
-}
-
-// ── Python Execution ──
-export interface PythonResult {
+export interface CodeResult {
   stdout: string;
   stderr: string;
   error: string | null;
-  result: string | null;
+  exitCode: number | null;
 }
 
+const PISTON_API = 'https://emkc.org/api/v2/piston/execute';
+
+// Language version mapping
+const LANGUAGE_VERSIONS: Record<string, string> = {
+  python: '3.10.0',
+  python3: '3.10.0',
+  javascript: '18.15.0',
+  js: '18.15.0',
+  typescript: '5.0.3',
+  ts: '5.0.3',
+  bash: '5.2.0',
+  sh: '5.2.0',
+  ruby: '3.0.1',
+  go: '1.16.2',
+  rust: '1.68.2',
+  java: '15.0.2',
+  c: '10.2.0',
+  cpp: '10.2.0',
+  csharp: '6.4.0',
+  php: '8.2.3',
+  swift: '5.2.5',
+  kotlin: '1.8.20',
+  lua: '5.4.4',
+  r: '4.2.1',
+  dart: '2.19.6',
+  scala: '3.2.2',
+  sql: '3.36.0',
+  perl: '5.36.0',
+  haskell: '9.0.2',
+  elixir: '1.14.2',
+  ocaml: '4.14.0',
+  crystal: '1.8.0',
+  nim: '1.6.14',
+  zig: '0.10.1',
+  julia: '1.8.5',
+};
+
+export async function executeCode(
+  code: string,
+  language: string = 'python',
+  injectedVars?: Record<string, string>,
+): Promise<CodeResult> {
+  const lang = language.toLowerCase();
+  const version = LANGUAGE_VERSIONS[lang] || '3.10.0';
+
+  // For Python, inject secrets as environment variables
+  let fullCode = code;
+  if (injectedVars && Object.keys(injectedVars).length > 0) {
+    if (lang === 'python' || lang === 'python3') {
+      const envSetup = Object.entries(injectedVars)
+        .map(([k, v]) => `import os; os.environ['${k.replace(/'/g, '')}'] = '${v.replace(/'/g, "\\'")}'`)
+        .join('; ');
+      fullCode = envSetup + '\n' + code;
+    } else if (lang === 'javascript' || lang === 'js') {
+      const envSetup = Object.entries(injectedVars)
+        .map(([k, v]) => `process.env['${k}'] = '${v.replace(/'/g, "\\'")}'`)
+        .join('; ');
+      fullCode = envSetup + '\n' + code;
+    }
+  }
+
+  try {
+    const resp = await fetch(PISTON_API, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        language: lang === 'python3' ? 'python' : lang,
+        version,
+        files: [{ name: 'main', content: fullCode }],
+        stdin: '',
+        args: [],
+        compile_timeout: 10000,
+        run_timeout: 15000,
+      }),
+    });
+
+    if (!resp.ok) {
+      const errText = await resp.text();
+      return { stdout: '', stderr: '', error: `Piston API error (${resp.status}): ${errText}`, exitCode: null };
+    }
+
+    const data = await resp.json() as any;
+
+    // Piston returns { run: { stdout, stderr, code, signal, output }, compile: { ... } }
+    const run = data.run || {};
+    const compile = data.compile || {};
+
+    let stderr = run.stderr || '';
+    if (compile.stderr) stderr += compile.stderr;
+
+    return {
+      stdout: run.stdout || '',
+      stderr: stderr,
+      error: run.code !== 0 ? `Process exited with code ${run.code}` : null,
+      exitCode: run.code ?? null,
+    };
+  } catch (err: any) {
+    return { stdout: '', stderr: '', error: err.message, exitCode: null };
+  }
+}
+
+// Keep the Python-specific function name for backward compat
 export async function executePython(
   code: string,
   injectedVars?: Record<string, string>,
-): Promise<PythonResult> {
-  try {
-    const pyodide = await getPyodide();
-
-    let stdout = '';
-    let stderr = '';
-
-    pyodide.setStdout({ batched: (s: string) => { stdout += s + '\n'; } });
-    pyodide.setStderr({ batched: (s: string) => { stderr += s + '\n'; } });
-
-    // Inject secrets/environment variables as Python os.environ
-    let setupCode = '';
-    if (injectedVars) {
-      setupCode = 'import os\n';
-      for (const [key, value] of Object.entries(injectedVars)) {
-        // Safely set each env var
-        const escaped = value.replace(/'/g, "\\'");
-        setupCode += `os.environ['${key}'] = '${escaped}'\n`;
-      }
-    }
-
-    const fullCode = setupCode + '\n' + code;
-    pyodide.runPython(fullCode);
-    return { stdout: stdout.trim(), stderr: stderr.trim(), error: null, result: null };
-  } catch (err: any) {
-    return { stdout: '', stderr: '', error: err.message, result: null };
-  }
+): Promise<{ stdout: string; stderr: string; error: string | null; result: string | null }> {
+  const result = await executeCode(code, 'python', injectedVars);
+  return { stdout: result.stdout, stderr: result.stderr, error: result.error, result: null };
 }
 
 // ── File System (Supabase-backed) ──
@@ -109,7 +148,7 @@ export async function fileCreate(filename: string, content: string, language: st
   if (!SUPABASE_KEY) return { success: false, error: 'Database not configured' };
 
   try {
-    // Upsert: if file exists, update it
+    // Check if file exists
     const existingResp = await fetch(
       `${SUPABASE_URL}/rest/v1/ai_files?filename=eq.${encodeURIComponent(filename)}&session_id=eq.${encodeURIComponent(sessionId)}&select=id&limit=1`,
       { headers: SUPA_HEADERS },
@@ -117,7 +156,7 @@ export async function fileCreate(filename: string, content: string, language: st
     const existing = await existingResp.json() as any[];
 
     if (existing.length > 0) {
-      // Update existing
+      // Update
       const resp = await fetch(
         `${SUPABASE_URL}/rest/v1/ai_files?id=eq.${existing[0].id}`,
         {
@@ -129,7 +168,7 @@ export async function fileCreate(filename: string, content: string, language: st
       return { success: resp.ok, error: resp.ok ? undefined : `Failed: ${resp.status}` };
     }
 
-    // Create new
+    // Create
     const resp = await fetch(`${SUPABASE_URL}/rest/v1/ai_files`, {
       method: 'POST',
       headers: { ...SUPA_HEADERS, 'Prefer': 'return=minimal' },
@@ -218,11 +257,13 @@ export interface GitHubPushResult {
   error?: string;
 }
 
-const GITHUB_HEADERS: Record<string, string> = {
-  'Authorization': `Bearer ${GITHUB_TOKEN}`,
-  'Accept': 'application/vnd.github+json',
-  'Content-Type': 'application/json',
-};
+function getGithubHeaders(): Record<string, string> {
+  return {
+    'Authorization': `Bearer ${GITHUB_TOKEN}`,
+    'Accept': 'application/vnd.github+json',
+    'Content-Type': 'application/json',
+  };
+}
 
 export async function githubPush(
   owner: string,
@@ -235,10 +276,10 @@ export async function githubPush(
   if (!GITHUB_TOKEN) return { success: false, error: 'GitHub token not configured. Set GITHUB_TOKEN env var.' };
 
   try {
-    // 1. Get the current commit SHA of the branch
+    // 1. Get the current commit SHA
     const branchResp = await fetch(
       `https://api.github.com/repos/${owner}/${repo}/branches/${branch}`,
-      { headers: GITHUB_HEADERS },
+      { headers: getGithubHeaders() },
     );
     if (!branchResp.ok) {
       const err = await branchResp.json().catch(() => ({}));
@@ -250,7 +291,7 @@ export async function githubPush(
     // 2. Get the tree SHA
     const commitResp = await fetch(
       `https://api.github.com/repos/${owner}/${repo}/commits/${latestCommitSha}`,
-      { headers: GITHUB_HEADERS },
+      { headers: getGithubHeaders() },
     );
     const commitData = await commitResp.json() as any;
     const baseTreeSha = commitData.commit.tree.sha;
@@ -261,7 +302,7 @@ export async function githubPush(
       `https://api.github.com/repos/${owner}/${repo}/git/blobs`,
       {
         method: 'POST',
-        headers: GITHUB_HEADERS,
+        headers: getGithubHeaders(),
         body: JSON.stringify({ content: contentBase64, encoding: 'base64' }),
       },
     );
@@ -271,12 +312,12 @@ export async function githubPush(
     }
     const blobData = await blobResp.json() as any;
 
-    // 4. Create a new tree with the file
+    // 4. Create a new tree
     const treeResp = await fetch(
       `https://api.github.com/repos/${owner}/${repo}/git/trees`,
       {
         method: 'POST',
-        headers: GITHUB_HEADERS,
+        headers: getGithubHeaders(),
         body: JSON.stringify({
           base_tree: baseTreeSha,
           tree: [{ path, mode: '100644', type: 'blob', sha: blobData.sha }],
@@ -294,7 +335,7 @@ export async function githubPush(
       `https://api.github.com/repos/${owner}/${repo}/git/commits`,
       {
         method: 'POST',
-        headers: GITHUB_HEADERS,
+        headers: getGithubHeaders(),
         body: JSON.stringify({
           message: commitMessage,
           tree: treeData.sha,
@@ -313,7 +354,7 @@ export async function githubPush(
       `https://api.github.com/repos/${owner}/${repo}/git/refs/heads/${branch}`,
       {
         method: 'PATCH',
-        headers: GITHUB_HEADERS,
+        headers: getGithubHeaders(),
         body: JSON.stringify({ sha: newCommitData.sha }),
       },
     );
@@ -328,14 +369,13 @@ export async function githubPush(
   }
 }
 
-// List repos the token has access to
 export async function githubListRepos(): Promise<{ success: boolean; repos?: any[]; error?: string }> {
   if (!GITHUB_TOKEN) return { success: false, error: 'GitHub token not configured' };
 
   try {
     const resp = await fetch(
       'https://api.github.com/user/repos?sort=updated&per_page=20&type=all',
-      { headers: GITHUB_HEADERS },
+      { headers: getGithubHeaders() },
     );
     if (!resp.ok) return { success: false, error: `Failed: ${resp.status}` };
     const repos = await resp.json() as any[];
@@ -348,7 +388,6 @@ export async function githubListRepos(): Promise<{ success: boolean; repos?: any
   }
 }
 
-// List files in a repo
 export async function githubListFiles(owner: string, repo: string, path: string = '', branch: string = 'main'): Promise<{ success: boolean; files?: any[]; error?: string }> {
   if (!GITHUB_TOKEN) return { success: false, error: 'GitHub token not configured' };
 
@@ -356,7 +395,7 @@ export async function githubListFiles(owner: string, repo: string, path: string 
     const pathParam = path ? `/${path}` : '';
     const resp = await fetch(
       `https://api.github.com/repos/${owner}/${repo}/contents${pathParam}?ref=${branch}`,
-      { headers: GITHUB_HEADERS },
+      { headers: getGithubHeaders() },
     );
     if (!resp.ok) return { success: false, error: `Failed: ${resp.status}` };
     const data = await resp.json();
@@ -370,14 +409,13 @@ export async function githubListFiles(owner: string, repo: string, path: string 
   }
 }
 
-// Read a file from GitHub
 export async function githubReadFile(owner: string, repo: string, path: string, branch: string = 'main'): Promise<{ success: boolean; content?: string; error?: string }> {
   if (!GITHUB_TOKEN) return { success: false, error: 'GitHub token not configured' };
 
   try {
     const resp = await fetch(
       `https://api.github.com/repos/${owner}/${repo}/contents/${path}?ref=${branch}`,
-      { headers: GITHUB_HEADERS },
+      { headers: getGithubHeaders() },
     );
     if (!resp.ok) return { success: false, error: `Failed: ${resp.status}` };
     const data = await resp.json() as any;
@@ -392,16 +430,6 @@ export async function githubReadFile(owner: string, repo: string, path: string, 
 
 // ── Secret Management (Supabase-backed) ──
 
-export interface SecretRecord {
-  id: string;
-  key_name: string;
-  key_value: string;
-  description: string;
-  service: string;
-  created_at: string;
-}
-
-// Simple XOR-based obfuscation (not military-grade, but prevents casual reading)
 const SECRET_OBFUSCATION_KEY = process.env.SECRET_OBFUSCATION_KEY || 'cozanet-sandbox-default-key-2026';
 
 function obfuscate(value: string): string {
@@ -432,7 +460,6 @@ export async function secretStore(
   if (!SUPABASE_KEY) return { success: false, error: 'Database not configured' };
 
   try {
-    // Upsert: if key exists, update it
     const existingResp = await fetch(
       `${SUPABASE_URL}/rest/v1/ai_secrets?key_name=eq.${encodeURIComponent(keyName)}&select=id`,
       { headers: SUPA_HEADERS },
@@ -442,7 +469,6 @@ export async function secretStore(
     const obfuscatedValue = obfuscate(keyValue);
 
     if (existing.length > 0) {
-      // Update
       const resp = await fetch(
         `${SUPABASE_URL}/rest/v1/ai_secrets?id=eq.${existing[0].id}`,
         {
@@ -453,7 +479,6 @@ export async function secretStore(
       );
       return { success: resp.ok, error: resp.ok ? undefined : `Failed: ${resp.status}` };
     } else {
-      // Insert
       const resp = await fetch(`${SUPABASE_URL}/rest/v1/ai_secrets`, {
         method: 'POST',
         headers: { ...SUPA_HEADERS, 'Prefer': 'return=minimal' },
@@ -513,7 +538,6 @@ export async function secretDelete(keyName: string): Promise<{ success: boolean;
   }
 }
 
-// Get all secrets as env vars for Python sandbox injection
 export async function getAllSecretsForSandbox(): Promise<Record<string, string>> {
   if (!SUPABASE_KEY) return {};
 

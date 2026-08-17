@@ -11,7 +11,7 @@
 
 import { tavilySearch, tavilyExtract, tavilySiteSearch } from '@/lib/tavily';
 import {
-  executePython, fileCreate, fileRead, fileList, fileUpdate, fileDelete,
+  executeCode, fileCreate, fileRead, fileList, fileUpdate, fileDelete,
   githubPush, githubListRepos, githubListFiles, githubReadFile,
   secretStore, secretGet, secretList, secretDelete, getAllSecretsForSandbox,
 } from '@/lib/sandbox';
@@ -692,12 +692,13 @@ export async function executeTool(name: string, args: any): Promise<ToolResult> 
       }
     }
 
-    // ── Code Execute (Real Python via Pyodide) ──
+    // ── Code Execute (Real execution via Piston API) ──
     case 'code_execute': {
       try {
         // Inject stored secrets as environment variables
         const secrets = await getAllSecretsForSandbox();
-        const result = await executePython(args.code, secrets);
+        const language = args.language || 'python';
+        const result = await executeCode(args.code, language, secrets);
         return {
           success: !result.error,
           data: {
@@ -707,7 +708,7 @@ export async function executeTool(name: string, args: any): Promise<ToolResult> 
           },
           display: {
             type: 'code_output',
-            title: 'Python execution',
+            title: `${args.language || 'Python'} execution`,
             items: [{
               output: result.stdout,
               error: result.error || result.stderr,
