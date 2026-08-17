@@ -171,15 +171,86 @@ export const TOOLS: ToolDefinition[] = [
   {
     type: 'function',
     function: {
-      name: 'code_run',
-      description: 'Execute JavaScript/TypeScript code in a sandboxed environment. Use for calculations, data processing, or quick scripts.',
+      name: 'code_execute',
+      description: 'Execute Python code in a real sandbox with full standard library (math, json, re, datetime, itertools, collections, statistics, fractions, decimal, etc). Use for calculations, data processing, algorithms, debugging code, running simulations, or any task that needs code execution. The code runs in an isolated Python 3 environment. Output from print() is captured and returned. You can write multi-line programs.',
       parameters: {
         type: 'object',
         properties: {
-          code: { type: 'string', description: 'The code to execute (JavaScript)' },
-          language: { type: 'string', description: 'Language: "javascript" or "typescript" (default javascript)' },
+          code: { type: 'string', description: 'Python code to execute. Use print() to output results. Multi-line programs are supported.' },
+          description: { type: 'string', description: 'Brief description of what the code does (for display)' },
         },
         required: ['code'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'file_create',
+      description: 'Create a new file in the virtual file system. Useful when building multi-file projects, saving code for later, or organizing work. Files are persisted and can be read back in future messages.',
+      parameters: {
+        type: 'object',
+        properties: {
+          filename: { type: 'string', description: 'The filename (e.g. "main.py", "utils.js", "README.md")' },
+          content: { type: 'string', description: 'The full content of the file' },
+          language: { type: 'string', description: 'Programming language (e.g. "python", "javascript", "typescript", "markdown"). Auto-detected from extension if omitted.' },
+        },
+        required: ['filename', 'content'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'file_read',
+      description: 'Read the content of a file from the virtual file system. Returns the full file content.',
+      parameters: {
+        type: 'object',
+        properties: {
+          filename: { type: 'string', description: 'The filename to read' },
+        },
+        required: ['filename'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'file_list',
+      description: 'List all files in the virtual file system. Returns filenames, languages, and sizes.',
+      parameters: {
+        type: 'object',
+        properties: {},
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'file_update',
+      description: 'Update an existing file in the virtual file system. Overwrites the previous content entirely.',
+      parameters: {
+        type: 'object',
+        properties: {
+          filename: { type: 'string', description: 'The filename to update' },
+          content: { type: 'string', description: 'The new content of the file' },
+        },
+        required: ['filename', 'content'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'file_delete',
+      description: 'Delete a file from the virtual file system.',
+      parameters: {
+        type: 'object',
+        properties: {
+          filename: { type: 'string', description: 'The filename to delete' },
+        },
+        required: ['filename'],
       },
     },
   },
