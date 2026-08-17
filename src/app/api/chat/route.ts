@@ -518,7 +518,7 @@ export async function POST(req: NextRequest) {
             });
           }
 
-          // Step 2: Call Groq again with tool results to generate final response
+          // Build follow-up messages with tool results
           const followUpMessages = [
             ...messages,
             {
@@ -533,41 +533,36 @@ export async function POST(req: NextRequest) {
             ...toolMessages,
           ];
 
-          const finalResp = await callGroq(followUpMessages, undefined, undefined, GROQ_TOOL_MODEL);
-          if (!finalResp.ok || !finalResp.body) {
-            throw new Error('Groq follow-up failed');
+          // Step 2: Call Groq again with tool results (non-streaming for reliability)
+          const followUpBody: any = {
+            model: GROQ_TOOL_MODEL,
+            messages: followUpMessages,
+            max_tokens: 2048,
+            temperature: 0.7,
+            stream: false,
+          };
+          const finalResp = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${GROQ_API_KEY}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(followUpBody),
+          });
+          if (!finalResp.ok) {
+            const errText = await finalResp.text().catch(() => 'Unknown');
+            throw new Error(`Groq follow-up failed: ${finalResp.status} ${errText}`);
           }
+          const finalData = await finalResp.json() as any;
+          content = finalData?.choices?.[0]?.message?.content || '';
 
-          // Stream the final response
-          const reader = finalResp.body.getReader();
-          const decoder = new TextDecoder();
-          let streamBuffer = '';
-          let fullResponse = '';
-
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            streamBuffer += decoder.decode(value, { stream: true });
-            const lines = streamBuffer.split('\n');
-            streamBuffer = lines.pop() || '';
-
-            for (const line of lines) {
-              const trimmed = line.trim();
-              if (!trimmed.startsWith('data: ')) continue;
-              const raw = trimmed.slice(6);
-              if (raw === '[DONE]') continue;
-              try {
-                const parsed = JSON.parse(raw);
-                const delta = parsed.choices?.[0]?.delta;
-                if (delta?.content) {
-                  fullResponse += delta.content;
-                  send({ chunk: delta.content });
-                }
-              } catch {}
+          // Send content as chunks for streaming effect
+          if (content) {
+            const words = content.split(' ');
+            for (let i = 0; i < words.length; i++) {
+              send({ chunk: (i > 0 ? ' ' : '') + words[i] });
             }
           }
-
-          content = fullResponse;
         } else if (content) {
           // No tools, just send the content as chunks
           const words = content.split(' ');
