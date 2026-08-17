@@ -1,12 +1,11 @@
 /**
  * Memory API — CRUD for the CozanetOS sidebar memory panel
  *
- * GET    /api/memory        → list all memories
+ * GET    /api/memory        → list all memories [{id, content, category, created_at}]
  * POST   /api/memory        → save a memory { content, category? }
  * DELETE /api/memory        → forget a memory { id }
  *
  * Uses Supabase ai_memory table with memory_type 'MEMORY' for persistent memories
- * (distinct from 'CHAT_USER'/'CHAT_ASSISTANT' which are conversation history).
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -23,18 +22,10 @@ const HEADERS = {
   'Content-Type': 'application/json',
 };
 
-interface MemoryItem {
-  id: string;
-  text: string;
-  tag: string;
-  category?: string;
-  created_at?: string;
-}
-
-// GET — list all persistent memories
+// GET — list all persistent memories (field names match frontend MemoryItem)
 export async function GET() {
   if (!SUPABASE_KEY) {
-    return NextResponse.json([]);
+    return NextResponse.json({ memories: [] });
   }
 
   try {
@@ -44,23 +35,20 @@ export async function GET() {
     );
 
     if (!resp.ok) {
-      console.error('[memory API] GET failed:', resp.status);
-      return NextResponse.json([]);
+      return NextResponse.json({ memories: [] });
     }
 
     const data = await resp.json() as any[];
-    const memories: MemoryItem[] = data.map(r => ({
+    const memories = data.map(r => ({
       id: r.id,
-      text: r.content,
-      tag: r.source || 'memory',
-      category: r.importance > 7 ? 'important' : 'general',
+      content: r.content,
+      category: r.source || 'general',
       created_at: r.created_at,
     }));
 
-    return NextResponse.json(memories);
-  } catch (err: any) {
-    console.error('[memory API] GET error:', err.message);
-    return NextResponse.json([]);
+    return NextResponse.json({ memories });
+  } catch {
+    return NextResponse.json({ memories: [] });
   }
 }
 
@@ -73,7 +61,7 @@ export async function POST(req: NextRequest) {
   }
 
   if (!SUPABASE_KEY) {
-    return NextResponse.json({ id: 'local-' + Date.now(), text: content, tag: category || 'memory' });
+    return NextResponse.json({ id: 'local-' + Date.now(), content, category: category || 'general' });
   }
 
   try {
@@ -83,14 +71,13 @@ export async function POST(req: NextRequest) {
       body: JSON.stringify({
         memory_type: 'MEMORY',
         content,
-        importance: category === 'important' ? 8 : 5,
-        source: category || 'memory',
+        importance: 5,
+        source: category || 'general',
         is_active: true,
       }),
     });
 
     if (!resp.ok) {
-      console.error('[memory API] POST failed:', resp.status);
       return NextResponse.json({ error: 'Failed to save memory' }, { status: 500 });
     }
 
@@ -98,19 +85,30 @@ export async function POST(req: NextRequest) {
     const created = data[0];
     return NextResponse.json({
       id: created?.id || 'new',
-      text: content,
-      tag: category || 'memory',
+      content,
+      category: category || 'general',
     });
   } catch (err: any) {
-    console.error('[memory API] POST error:', err.message);
     return NextResponse.json({ error: err.message }, { status: 500 });
   }
 }
 
-// DELETE — forget a memory
+// DELETE — forget a memory (accepts id in body OR query param)
 export async function DELETE(req: NextRequest) {
-  const { searchParams } = new URL(req.url);
-  const id = searchParams.get('id');
+  let id: string | null = null;
+
+  // Try body first (frontend sends JSON body)
+  try {
+    const body = await req.json();
+    id = body.id;
+  } catch {
+    // Fall back to query param
+  }
+
+  if (!id) {
+    const { searchParams } = new URL(req.url);
+    id = searchParams.get('id');
+  }
 
   if (!id) {
     return NextResponse.json({ error: 'id required' }, { status: 400 });

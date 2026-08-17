@@ -28,7 +28,10 @@ export const dynamic = 'force-dynamic';
 const GROQ_API_KEY = process.env.GROQ_API_KEY || '';
 const GROQ_MODEL = 'openai/gpt-oss-120b';
 const GROQ_TOOL_MODEL = 'openai/gpt-oss-20b';
-const GROQ_VISION_MODEL = 'openai/gpt-oss-120b';
+
+// Vision via Google Gemini (Groq's GPT-OSS doesn't support images)
+const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY || '';
+const GEMINI_MODEL = 'gemini-3.6-flash';
 
 const SYSTEM_PROMPT = `You are CozanetOS, an intelligent personal AI assistant with memory and web browsing capabilities.
 You have tools for web search, browsing, weather, calculations, translations, memory, and code execution.
@@ -43,7 +46,7 @@ CRITICAL RULES:
 7. When the user asks about something they may have told you before, recall from memory first using memory_recall.
 8. Keep responses concise unless the user asks for detail.
 9. Format with markdown — code blocks for code, lists for steps, bold for emphasis.
-10. You have VISION capabilities. When the user sends an image, analyze it carefully.
+10. You have VISION capabilities. When the user sends an image, analyze it carefully and describe what you see. Respond as if you can see the image directly.
 11. Respond as if you already know everything the tools told you. Don't describe what the tools returned.
 
 Current date: ${new Date().toISOString().split('T')[0]}`;
@@ -97,12 +100,53 @@ function callGroq(messages: any[], tools?: any[], toolChoice?: string, model?: s
   });
 }
 
-function buildVisionContent(text: string, images: string[]): any[] {
-  const content: any[] = [{ type: 'text', text }];
+// ── Gemini Vision: call Google Gemini for image analysis + streaming response ──
+function callGeminiVision(
+  systemPrompt: string,
+  history: { role: string; content: string }[],
+  userMessage: string,
+  images: string[],
+) {
+  // Convert data URIs to inline data for Gemini
+  const parts: any[] = [{ text: userMessage || 'What do you see in this image?' }];
   for (const img of images) {
-    content.push({ type: 'image_url', image_url: { url: img } });
+    // Parse data URI: data:image/png;base64,xxxx
+    const match = img.match(/^data:(image\/\w+);base64,(.+)$/);
+    if (match) {
+      parts.push({
+        inline_data: { mime_type: match[1], data: match[2] },
+      });
+    }
   }
-  return content;
+
+  // Convert history to Gemini format
+  const contents: any[] = [];
+  for (const m of history) {
+    contents.push({
+      role: m.role === 'assistant' ? 'model' : 'user',
+      parts: [{ text: m.content }],
+    });
+  }
+  // Add the current message with images
+  contents.push({ role: 'user', parts });
+
+  const requestBody = {
+    contents,
+    systemInstruction: { parts: [{ text: systemPrompt }] },
+    generationConfig: {
+      maxOutputTokens: 2048,
+      temperature: 0.7,
+    },
+  };
+
+  return fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:streamGenerateContent?alt=sse&key=${GOOGLE_API_KEY}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(requestBody),
+    },
+  );
 }
 
 async function readStream(resp: Response): Promise<{ content: string; toolCalls: any[] }> {
@@ -159,6 +203,39 @@ async function readStream(resp: Response): Promise<{ content: string; toolCalls:
   return { content, toolCalls };
 }
 
+// ── Read Gemini SSE stream and extract text chunks ──
+async function readGeminiStream(resp: Response): Promise<string> {
+  const reader = resp.body!.getReader();
+  const decoder = new TextDecoder();
+  let fullText = '';
+  let buffer = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith('data: ')) continue;
+      try {
+        const parsed = JSON.parse(trimmed.slice(6));
+        const parts = parsed?.candidates?.[0]?.content?.parts || [];
+        for (const part of parts) {
+          if (part.text) {
+            fullText += part.text;
+          }
+        }
+      } catch { /* skip */ }
+    }
+  }
+
+  return fullText;
+}
+
 function isBrowserTool(name: string): boolean {
   return ['browser_navigate', 'jina_reader', 'browser_interact'].includes(name);
 }
@@ -209,7 +286,6 @@ export async function POST(req: NextRequest) {
     userMessage = lastUser?.text || '';
     if (body.image) images = [body.image];
     else if (lastUser?.image) images = [lastUser.image];
-    // Generate session ID from the conversation (or use a header/cookie)
     sessionId = req.headers.get('x-session-id') || `s-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   } else {
     // OLD format: { message, sessionId, images }
@@ -237,33 +313,77 @@ export async function POST(req: NextRequest) {
 
       try {
         const history = await getHistory(sessionId, 20);
+        saveMessage(sessionId, 'user', userMessage || '[image]');
 
+        send({ status: 'thinking' });
+
+        const hasImages = images.length > 0;
+
+        // ── VISION PATH: Use Gemini when images are present ──
+        if (hasImages && GOOGLE_API_KEY) {
+          const geminiResp = await callGeminiVision(
+            SYSTEM_PROMPT,
+            history.map((m: any) => ({ role: m.role, content: m.content })),
+            userMessage || 'What do you see in this image?',
+            images,
+          );
+
+          if (!geminiResp.ok || !geminiResp.body) {
+            const errText = await geminiResp.text().catch(() => 'Unknown');
+            throw new Error(`Gemini vision error: ${geminiResp.status} ${errText}`);
+          }
+
+          // Read Gemini stream and forward as chunks
+          const reader = geminiResp.body.getReader();
+          const decoder = new TextDecoder();
+          let streamBuffer = '';
+          let fullResponse = '';
+
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            streamBuffer += decoder.decode(value, { stream: true });
+            const lines = streamBuffer.split('\n');
+            streamBuffer = lines.pop() || '';
+
+            for (const line of lines) {
+              const trimmed = line.trim();
+              if (!trimmed.startsWith('data: ')) continue;
+              try {
+                const parsed = JSON.parse(trimmed.slice(6));
+                const parts = parsed?.candidates?.[0]?.content?.parts || [];
+                for (const part of parts) {
+                  if (part.text) {
+                    fullResponse += part.text;
+                    send({ chunk: part.text });
+                  }
+                }
+              } catch { /* skip */ }
+            }
+          }
+
+          // Auto-save memories from vision responses too
+          if (fullResponse) {
+            saveMessage(sessionId, 'assistant', fullResponse);
+          }
+
+          send({ done: true });
+          return;
+        }
+
+        // ── TEXT PATH: Use Groq with tool detection ──
         const messages: any[] = [
           { role: 'system', content: SYSTEM_PROMPT },
           ...history.map((m: any) => ({ role: m.role, content: m.content })),
           { role: 'user', content: userMessage || 'What do you see in this image?' },
         ];
 
-        const hasImages = images.length > 0;
-        let useVision = hasImages;
-
-        if (hasImages) {
-          messages[messages.length - 1] = {
-            role: 'user',
-            content: buildVisionContent(userMessage || 'What do you see in this image?', images),
-          };
-        }
-
-        saveMessage(sessionId, 'user', userMessage || '[image]');
-
-        send({ status: 'thinking' });
-
-        // Step 1: Call Groq with tools (8b model for tool detection)
+        // Step 1: Call Groq with tools (20b model for tool detection)
         const toolResp = await callGroq(
           messages,
-          useVision ? undefined : TOOLS,
+          TOOLS,
           'auto',
-          useVision ? GROQ_VISION_MODEL : GROQ_TOOL_MODEL,
+          GROQ_TOOL_MODEL,
         );
         if (!toolResp.ok || !toolResp.body) {
           const errText = await toolResp.text().catch(() => 'Unknown');
