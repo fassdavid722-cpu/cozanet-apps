@@ -22,7 +22,7 @@ import { TOOLS } from '@/lib/tools/registry';
 import { executeTool } from '@/lib/tools/executor';
 import { saveMessage, getHistory, saveMemory, getMemories } from '@/lib/memory';
 
-export const runtime = 'edge';
+export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 const GROQ_API_KEY = process.env.GROQ_API_KEY || '';
@@ -533,7 +533,7 @@ export async function POST(req: NextRequest) {
             ...toolMessages,
           ];
 
-          const finalResp = await callGroq(followUpMessages, undefined, undefined, GROQ_MODEL);
+          const finalResp = await callGroq(followUpMessages, undefined, undefined, GROQ_TOOL_MODEL);
           if (!finalResp.ok || !finalResp.body) {
             throw new Error('Groq follow-up failed');
           }
