@@ -10,6 +10,11 @@
  */
 
 import { tavilySearch, tavilyExtract, tavilySiteSearch } from '@/lib/tavily';
+import {
+  executePython, fileCreate, fileRead, fileList, fileUpdate, fileDelete,
+  githubPush, githubListRepos, githubListFiles, githubReadFile,
+  secretStore, secretGet, secretList, secretDelete, getAllSecretsForSandbox,
+} from '@/lib/sandbox';
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
@@ -681,6 +686,214 @@ export async function executeTool(name: string, args: any): Promise<ToolResult> 
           success: true,
           data: { logs, result: result !== undefined ? String(result) : undefined },
           display: { type: 'code_output', title: 'Code execution', items: [{ logs: logs.join('\n'), result: result !== undefined ? String(result) : 'undefined' }] },
+        };
+      } catch (err: any) {
+        return { success: false, data: { error: err.message } };
+      }
+    }
+
+    // ── Code Execute (Real Python via Pyodide) ──
+    case 'code_execute': {
+      try {
+        // Inject stored secrets as environment variables
+        const secrets = await getAllSecretsForSandbox();
+        const result = await executePython(args.code, secrets);
+        return {
+          success: !result.error,
+          data: {
+            stdout: result.stdout,
+            stderr: result.stderr,
+            error: result.error,
+          },
+          display: {
+            type: 'code_output',
+            title: 'Python execution',
+            items: [{
+              output: result.stdout,
+              error: result.error || result.stderr,
+            }],
+          },
+        };
+      } catch (err: any) {
+        return { success: false, data: { error: err.message } };
+      }
+    }
+
+    // ── File Operations (Supabase-backed) ────────
+    case 'file_create': {
+      try {
+        const language = args.language || (args.filename || '').split('.').pop() || 'text';
+        const sessionId = args._sessionId || 'global';
+        const result = await fileCreate(args.filename, args.content, language, sessionId);
+        return {
+          success: result.success,
+          data: { filename: args.filename, created: result.success, error: result.error },
+          display: { type: 'metadata', title: result.success ? 'File created' : 'Error', items: [{ filename: args.filename, error: result.error }] },
+        };
+      } catch (err: any) {
+        return { success: false, data: { error: err.message } };
+      }
+    }
+
+    case 'file_read': {
+      try {
+        const sessionId = args._sessionId || 'global';
+        const result = await fileRead(args.filename, sessionId);
+        return {
+          success: result.success,
+          data: { filename: args.filename, content: result.content, error: result.error },
+          display: { type: 'metadata', title: result.success ? args.filename : 'Error', items: [{ filename: args.filename, content: result.content?.slice(0, 500), error: result.error }] },
+        };
+      } catch (err: any) {
+        return { success: false, data: { error: err.message } };
+      }
+    }
+
+    case 'file_list': {
+      try {
+        const sessionId = args._sessionId || 'global';
+        const result = await fileList(sessionId);
+        return {
+          success: result.success,
+          data: { files: result.files, error: result.error },
+          display: { type: 'metadata', title: 'Files', items: result.files || [{ error: result.error }] },
+        };
+      } catch (err: any) {
+        return { success: false, data: { error: err.message } };
+      }
+    }
+
+    case 'file_update': {
+      try {
+        const sessionId = args._sessionId || 'global';
+        const result = await fileUpdate(args.filename, args.content, sessionId);
+        return {
+          success: result.success,
+          data: { filename: args.filename, updated: result.success, error: result.error },
+          display: { type: 'metadata', title: result.success ? 'File updated' : 'Error', items: [{ filename: args.filename, error: result.error }] },
+        };
+      } catch (err: any) {
+        return { success: false, data: { error: err.message } };
+      }
+    }
+
+    case 'file_delete': {
+      try {
+        const sessionId = args._sessionId || 'global';
+        const result = await fileDelete(args.filename, sessionId);
+        return {
+          success: result.success,
+          data: { filename: args.filename, deleted: result.success, error: result.error },
+          display: { type: 'metadata', title: result.success ? 'File deleted' : 'Error', items: [{ filename: args.filename, error: result.error }] },
+        };
+      } catch (err: any) {
+        return { success: false, data: { error: err.message } };
+      }
+    }
+
+    // ── GitHub Tools ─────────────────────────────
+    case 'github_list_repos': {
+      try {
+        const result = await githubListRepos();
+        return {
+          success: result.success,
+          data: { repos: result.repos, error: result.error },
+          display: { type: 'metadata', title: result.success ? 'Your GitHub Repos' : 'GitHub Error', items: result.repos || [{ error: result.error }] },
+        };
+      } catch (err: any) {
+        return { success: false, data: { error: err.message } };
+      }
+    }
+
+    case 'github_list_files': {
+      try {
+        const branch = args.branch || 'main';
+        const result = await githubListFiles(args.owner, args.repo, args.path || '', branch);
+        return {
+          success: result.success,
+          data: { files: result.files, error: result.error },
+          display: { type: 'metadata', title: result.success ? `${args.owner}/${args.repo}/${args.path || ''}` : 'GitHub Error', items: result.files || [{ error: result.error }] },
+        };
+      } catch (err: any) {
+        return { success: false, data: { error: err.message } };
+      }
+    }
+
+    case 'github_read_file': {
+      try {
+        const branch = args.branch || 'main';
+        const result = await githubReadFile(args.owner, args.repo, args.path, branch);
+        return {
+          success: result.success,
+          data: { path: args.path, content: result.content, error: result.error },
+          display: { type: 'metadata', title: result.success ? args.path : 'GitHub Error', items: [{ path: args.path, content: result.content?.slice(0, 500), error: result.error }] },
+        };
+      } catch (err: any) {
+        return { success: false, data: { error: err.message } };
+      }
+    }
+
+    case 'github_push': {
+      try {
+        const branch = args.branch || 'main';
+        const result = await githubPush(args.owner, args.repo, args.path, args.content, args.commit_message, branch);
+        return {
+          success: result.success,
+          data: { commitUrl: result.commitUrl, error: result.error },
+          display: { type: 'metadata', title: result.success ? 'Pushed to GitHub' : 'GitHub Error', items: [{ url: result.commitUrl, repo: `${args.owner}/${args.repo}`, path: args.path, error: result.error }] },
+        };
+      } catch (err: any) {
+        return { success: false, data: { error: err.message } };
+      }
+    }
+
+    // ── Secret Management ────────────────────────
+    case 'secret_store': {
+      try {
+        const result = await secretStore(args.key_name, args.key_value, args.service || 'general', args.description || '');
+        return {
+          success: result.success,
+          data: { key_name: args.key_name, stored: result.success, error: result.error },
+          display: { type: 'metadata', title: result.success ? 'Secret stored' : 'Error', items: [{ key: args.key_name, service: args.service, error: result.error }] },
+        };
+      } catch (err: any) {
+        return { success: false, data: { error: err.message } };
+      }
+    }
+
+    case 'secret_get': {
+      try {
+        const result = await secretGet(args.key_name);
+        return {
+          success: result.success,
+          data: { key_name: args.key_name, value: result.value, error: result.error },
+          display: { type: 'metadata', title: result.success ? 'Secret retrieved' : 'Error', items: [{ key: args.key_name, error: result.error }] },
+        };
+      } catch (err: any) {
+        return { success: false, data: { error: err.message } };
+      }
+    }
+
+    case 'secret_list': {
+      try {
+        const result = await secretList();
+        return {
+          success: result.success,
+          data: { secrets: result.secrets, error: result.error },
+          display: { type: 'metadata', title: result.success ? 'Stored Secrets' : 'Error', items: result.secrets || [{ error: result.error }] },
+        };
+      } catch (err: any) {
+        return { success: false, data: { error: err.message } };
+      }
+    }
+
+    case 'secret_delete': {
+      try {
+        const result = await secretDelete(args.key_name);
+        return {
+          success: result.success,
+          data: { key_name: args.key_name, deleted: result.success, error: result.error },
+          display: { type: 'metadata', title: result.success ? 'Secret deleted' : 'Error', items: [{ key: args.key_name, error: result.error }] },
         };
       } catch (err: any) {
         return { success: false, data: { error: err.message } };

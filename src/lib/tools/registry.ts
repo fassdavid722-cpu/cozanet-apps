@@ -172,7 +172,7 @@ export const TOOLS: ToolDefinition[] = [
     type: 'function',
     function: {
       name: 'code_execute',
-      description: 'Execute Python code in a real sandbox with full standard library (math, json, re, datetime, itertools, collections, statistics, fractions, decimal, etc). Use for calculations, data processing, algorithms, debugging code, running simulations, or any task that needs code execution. The code runs in an isolated Python 3 environment. Output from print() is captured and returned. You can write multi-line programs.',
+      description: 'Execute REAL Python 3 code in a sandbox powered by Pyodide (WebAssembly). Full standard library: math, json, re, datetime, itertools, collections, statistics, fractions, decimal, hashlib, base64, urllib, and more. Output from print() is captured and returned. Stored API keys/secrets are available via os.environ. Multi-line programs supported. Use for calculations, data processing, algorithms, testing code, file processing, API calls (urllib), and any task needing code execution.',
       parameters: {
         type: 'object',
         properties: {
@@ -281,6 +281,130 @@ export const TOOLS: ToolDefinition[] = [
           source_lang: { type: 'string', description: 'Source language code (auto-detect if omitted)' },
         },
         required: ['text', 'target_lang'],
+      },
+    },
+  },
+  // ── GitHub Tools ────────────────────────────
+  {
+    type: 'function',
+    function: {
+      name: 'github_list_repos',
+      description: 'List GitHub repositories the connected token has access to. Returns repo names, visibility, and default branches.',
+      parameters: {
+        type: 'object',
+        properties: {},
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'github_list_files',
+      description: 'List files and directories in a GitHub repository at a given path.',
+      parameters: {
+        type: 'object',
+        properties: {
+          owner: { type: 'string', description: 'Repository owner (username or org)' },
+          repo: { type: 'string', description: 'Repository name' },
+          path: { type: 'string', description: 'Directory path within the repo (empty string for root)' },
+          branch: { type: 'string', description: 'Branch name (default: main)' },
+        },
+        required: ['owner', 'repo'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'github_read_file',
+      description: 'Read the content of a file from a GitHub repository.',
+      parameters: {
+        type: 'object',
+        properties: {
+          owner: { type: 'string', description: 'Repository owner' },
+          repo: { type: 'string', description: 'Repository name' },
+          path: { type: 'string', description: 'File path within the repo' },
+          branch: { type: 'string', description: 'Branch name (default: main)' },
+        },
+        required: ['owner', 'repo', 'path'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'github_push',
+      description: 'Push (commit) a file to a GitHub repository. Creates a new commit with the file content on the specified branch. Use to save code to repos, update files, or create new projects.',
+      parameters: {
+        type: 'object',
+        properties: {
+          owner: { type: 'string', description: 'Repository owner (username or org)' },
+          repo: { type: 'string', description: 'Repository name' },
+          path: { type: 'string', description: 'File path in the repo (e.g. "src/main.py", "README.md")' },
+          content: { type: 'string', description: 'The full file content to commit' },
+          commit_message: { type: 'string', description: 'Commit message describing the change' },
+          branch: { type: 'string', description: 'Branch to push to (default: main)' },
+        },
+        required: ['owner', 'repo', 'path', 'content', 'commit_message'],
+      },
+    },
+  },
+  // ── Secret/API Key Management ───────────────
+  {
+    type: 'function',
+    function: {
+      name: 'secret_store',
+      description: 'Store an API key, token, or secret securely. Stored secrets are available in the Python sandbox via os.environ. Use when the user provides an API key they want the sandbox to use.',
+      parameters: {
+        type: 'object',
+        properties: {
+          key_name: { type: 'string', description: 'Environment variable name (e.g. "OPENAI_API_KEY", "GITHUB_TOKEN")' },
+          key_value: { type: 'string', description: 'The secret value to store' },
+          service: { type: 'string', description: 'Which service this key is for (e.g. "openai", "github", "stripe")' },
+          description: { type: 'string', description: 'Human-readable description of what this key is for' },
+        },
+        required: ['key_name', 'key_value'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'secret_get',
+      description: 'Retrieve a stored secret value by key name. Use when the sandbox needs to access an API key.',
+      parameters: {
+        type: 'object',
+        properties: {
+          key_name: { type: 'string', description: 'The secret key name to retrieve' },
+        },
+        required: ['key_name'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'secret_list',
+      description: 'List all stored secrets (names and services only — values are NOT shown for security).',
+      parameters: {
+        type: 'object',
+        properties: {},
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'secret_delete',
+      description: 'Delete a stored secret by key name.',
+      parameters: {
+        type: 'object',
+        properties: {
+          key_name: { type: 'string', description: 'The secret key name to delete' },
+        },
+        required: ['key_name'],
       },
     },
   },

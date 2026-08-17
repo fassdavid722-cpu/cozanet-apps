@@ -55,11 +55,19 @@ You have a REAL Python code execution sandbox via the code_execute tool.
 
 ## FILE SYSTEM
 You have a virtual file system for managing code projects:
-- file_create: Create files (e.g. main.py, utils.js, README.md)
+- file_create: Create files (e.g. main.py, utils.js, README.md) — persisted in database
 - file_read: Read file contents back
 - file_list: List all files in the workspace
 - file_update: Update existing files
 - file_delete: Remove files
+- github_list_repos: List your GitHub repositories
+- github_list_files: Browse files in a GitHub repo
+- github_read_file: Read file contents from GitHub
+- github_push: Push/commit code to a GitHub repo
+- secret_store: Store API keys securely (available in Python sandbox via os.environ)
+- secret_get: Retrieve a stored secret
+- secret_list: List stored secrets (names only)
+- secret_delete: Delete a stored secret
 - Use these to build multi-file projects, save code for later, or organize work.
 
 ## OTHER CAPABILITIES
@@ -308,6 +316,22 @@ function getToolStatus(toolName: string, args: any): SSEData {
       return { status: 'tool_running', toolName: 'Getting time', toolDetail: args.timezone || 'UTC' };
     case 'url_metadata':
       return { status: 'tool_running', toolName: 'Checking URL', toolDetail: args.url || '' };
+    case 'github_list_repos':
+      return { status: 'tool_running', toolName: 'GitHub', toolDetail: 'Listing repos' };
+    case 'github_list_files':
+      return { status: 'tool_running', toolName: 'GitHub', toolDetail: `${args.owner}/${args.repo}` };
+    case 'github_read_file':
+      return { status: 'tool_running', toolName: 'GitHub', toolDetail: args.path || '' };
+    case 'github_push':
+      return { status: 'tool_running', toolName: 'GitHub Push', toolDetail: `${args.owner}/${args.repo}/${args.path || ''}` };
+    case 'secret_store':
+      return { status: 'tool_running', toolName: 'Storing secret', toolDetail: args.key_name || '' };
+    case 'secret_get':
+      return { status: 'tool_running', toolName: 'Retrieving secret', toolDetail: args.key_name || '' };
+    case 'secret_list':
+      return { status: 'tool_running', toolName: 'Listing secrets', toolDetail: '' };
+    case 'secret_delete':
+      return { status: 'tool_running', toolName: 'Deleting secret', toolDetail: args.key_name || '' };
     default:
       return { status: 'tool_running', toolName, toolDetail: '' };
   }
@@ -485,7 +509,7 @@ export async function POST(req: NextRequest) {
             }
 
             // Execute the tool
-            const result = await executeTool(toolName, args);
+            const result = await executeTool(toolName, { ...args, _sessionId: sessionId });
 
             // Rich display for browser tools — send screenshot field
             if (result.display?.screenshotUrl) {
