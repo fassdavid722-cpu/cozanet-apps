@@ -1,137 +1,250 @@
 /**
- * Browser API Route — Headless browser for the AI.
- * Uses fetch-based extraction (serverless-compatible).
- * Supports: navigate, scrape, search, extractText, getLinks
+ * Browser API — Real headless Chromium on Vercel serverless
+ *
+ * Actions:
+ *   navigate  → { url }                   → { title, content, screenshot, links }
+ *   search    → { url, query }            → { title, content, screenshot, url }
+ *   click     → { url, value }            → { title, content, screenshot }
+ *   scroll    → { url }                   → { title, content, screenshot (full page) }
+ *   screenshot → { url }                 → { screenshot, title }
+ *
+ * Uses @sparticuz/chromium (serverless-optimized Chromium binary).
+ * Runtime: nodejs (NOT edge — Chromium needs Node.js APIs).
  */
 
-import { NextRequest } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
+import puppeteer from 'puppeteer-core';
+import chromium from '@sparticuz/chromium';
 
-export const runtime = 'edge';
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
+export const maxDuration = 60;
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
-function extractTitle(html: string): string {
-  const match = html.match(/<title[^>]*>([^<]*)<\/title>/i);
-  return match ? match[1].trim() : 'Untitled';
+async function launchBrowser() {
+  const executablePath = await chromium.executablePath();
+  const browser = await puppeteer.launch({
+    args: chromium.args,
+    executablePath,
+    headless: true,
+    defaultViewport: { width: 1280, height: 800 },
+  });
+  return browser;
 }
 
-function htmlToText(html: string): string {
-  return html
-    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
-    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
-    .replace(/<nav[^>]*>[\s\S]*?<\/nav>/gi, '')
-    .replace(/<footer[^>]*>[\s\S]*?<\/footer>/gi, '')
-    .replace(/<header[^>]*>[\s\S]*?<\/header>/gi, '')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/\s+/g, ' ')
-    .trim();
+function cleanUrl(url: string): string {
+  if (!url.startsWith('http')) url = `https://${url}`;
+  return url;
 }
 
-function extractLinks(html: string): { text: string; url: string }[] {
-  const links: { text: string; url: string }[] = [];
-  const linkRegex = /<a\s+[^>]*href=["']([^"']+)["'][^>]*>([^<]*)<\/a>/gi;
-  let match;
-  while ((match = linkRegex.exec(html)) !== null) {
-    if (match[1].startsWith('http') && match[2].trim()) {
-      links.push({ text: match[2].trim(), url: match[1] });
-    }
-  }
-  return links;
+function buildSearchUrl(siteUrl: string, query: string): string {
+  const encoded = encodeURIComponent(query);
+  const lower = siteUrl.toLowerCase();
+  if (lower.includes('google')) return `https://www.google.com/search?q=${encoded}`;
+  if (lower.includes('amazon')) return `https://www.amazon.com/s?k=${encoded}`;
+  if (lower.includes('youtube')) return `https://www.youtube.com/results?search_query=${encoded}`;
+  if (lower.includes('twitter') || lower.includes('x.com')) return `https://twitter.com/search?q=${encoded}`;
+  if (lower.includes('reddit')) return `https://www.reddit.com/search/?q=${encoded}`;
+  if (lower.includes('wikipedia')) return `https://en.wikipedia.org/w/index.php?search=${encoded}`;
+  if (lower.includes('github')) return `https://github.com/search?q=${encoded}`;
+  if (lower.includes('ebay')) return `https://www.ebay.com/sch/i.html?_nkw=${encoded}`;
+  const base = siteUrl.replace(/\/$/, '');
+  return `${base}/search?q=${encoded}`;
 }
 
 export async function POST(req: NextRequest) {
-  const { action, url, query, engine } = await req.json();
+  const { action, url: rawUrl, query, value, text } = await req.json();
+
+  if (!rawUrl && action !== 'screenshot') {
+    return NextResponse.json({ error: 'url required' }, { status: 400 });
+  }
+
+  const url = cleanUrl(rawUrl || '');
+  let browser: any = null;
 
   try {
+    browser = await launchBrowser();
+    const page = await browser.newPage();
+    await page.setUserAgent(UA);
+
+    // Block images/fonts/CSS for faster loading (we still get content + screenshots)
+    await page.setRequestInterception(true);
+    page.on('request', (req: any) => {
+      const type = req.resourceType();
+      if (['font', 'media'].includes(type)) {
+        req.abort();
+      } else {
+        req.continue();
+      }
+    });
+
+    let finalUrl = url;
+    let title = '';
+    let content = '';
+    let screenshot: string | null = null;
+    let links: { text: string; url: string }[] = [];
+
     switch (action) {
-      case 'navigate':
-      case 'extractText': {
-        const resp = await fetch(url, { headers: { 'User-Agent': UA } });
-        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-        const html = await resp.text();
-        const text = htmlToText(html);
-        const title = extractTitle(html);
-        
-        if (action === 'navigate') {
-          const links = extractLinks(html);
-          return new Response(JSON.stringify({ url, title, text, contentLength: html.length, links }), {
-            headers: { 'Content-Type': 'application/json' },
+      case 'navigate': {
+        await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
+        await page.waitForTimeout(1000);
+        title = await page.title();
+        content = await page.evaluate(() => {
+          // Extract readable content from the page
+          const removeElements = document.querySelectorAll('script, style, nav, footer, header, iframe, noscript');
+          removeElements.forEach(el => el.remove());
+          const body = document.body;
+          if (!body) return '';
+          // Get text with structure
+          const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT);
+          const texts: string[] = [];
+          let node;
+          while (node = walker.nextNode()) {
+            const t = node.textContent?.trim();
+            if (t && t.length > 2) texts.push(t);
+          }
+          return texts.join('\n').slice(0, 12000);
+        });
+
+        // Extract links
+        links = await page.evaluate(() => {
+          const anchors = document.querySelectorAll('a[href]');
+          const results: { text: string; url: string }[] = [];
+          anchors.forEach(a => {
+            const href = (a as HTMLAnchorElement).href;
+            const text = a.textContent?.trim();
+            if (href && href.startsWith('http') && text && text.length > 2) {
+              results.push({ text, url: href });
+            }
           });
-        }
-        return new Response(JSON.stringify({ url, title, text, length: text.length }), {
-          headers: { 'Content-Type': 'application/json' },
+          return results.slice(0, 30);
         });
-      }
 
-      case 'scrape': {
-        const resp = await fetch(url, { headers: { 'User-Agent': UA } });
-        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-        const html = await resp.text();
-        const text = htmlToText(html);
-        return new Response(JSON.stringify({
-          url,
-          title: extractTitle(html),
-          textContent: text,
-          markdown: text.slice(0, 5000),
-          excerpt: text.slice(0, 300),
-        }), {
-          headers: { 'Content-Type': 'application/json' },
-        });
-      }
-
-      case 'getLinks': {
-        const resp = await fetch(url, { headers: { 'User-Agent': UA } });
-        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-        const html = await resp.text();
-        const links = extractLinks(html);
-        return new Response(JSON.stringify({ url, links, count: links.length }), {
-          headers: { 'Content-Type': 'application/json' },
-        });
+        // Take screenshot (viewport, not full page for speed)
+        const screenshotBuffer = await page.screenshot({ encoding: 'binary', type: 'jpeg', quality: 75 });
+        screenshot = `data:image/jpeg;base64,${Buffer.from(screenshotBuffer).toString('base64')}`;
+        break;
       }
 
       case 'search': {
-        const searchUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
-        const resp = await fetch(searchUrl, { headers: { 'User-Agent': UA } });
-        if (!resp.ok) throw new Error(`Search failed: ${resp.status}`);
-        const html = await resp.text();
-        
-        const results: { title: string; url: string; snippet: string }[] = [];
-        const resultRegex = /<a[^>]*class="result__a"[^>]*href=["']([^"']+)["'][^>]*>([^<]*)<\/a>[\s\S]*?class="result__snippet"[^>]*>([^<]*)/gi;
-        let match;
-        while ((match = resultRegex.exec(html)) !== null) {
-          results.push({ title: match[2].trim(), url: match[1].trim(), snippet: match[3].trim() });
-        }
-        return new Response(JSON.stringify({ query, results }), {
-          headers: { 'Content-Type': 'application/json' },
+        // Navigate to the site, type in search box, submit
+        const searchUrl = buildSearchUrl(url, query || value || '');
+        await page.goto(searchUrl, { waitUntil: 'networkidle2', timeout: 30000 });
+        await page.waitForTimeout(2000);
+        finalUrl = page.url();
+        title = await page.title();
+        content = await page.evaluate(() => {
+          const removeElements = document.querySelectorAll('script, style, nav, footer, iframe, noscript');
+          removeElements.forEach(el => el.remove());
+          const body = document.body;
+          if (!body) return '';
+          const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT);
+          const texts: string[] = [];
+          let node;
+          while (node = walker.nextNode()) {
+            const t = node.textContent?.trim();
+            if (t && t.length > 2) texts.push(t);
+          }
+          return texts.join('\n').slice(0, 12000);
         });
+
+        const screenshotBuffer = await page.screenshot({ encoding: 'binary', type: 'jpeg', quality: 75 });
+        screenshot = `data:image/jpeg;base64,${Buffer.from(screenshotBuffer).toString('base64')}`;
+        break;
+      }
+
+      case 'click': {
+        // Navigate to URL, then click a link matching the text
+        await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
+        await page.waitForTimeout(1000);
+
+        const linkText = value || text || '';
+        const clicked = await page.evaluate((searchText: string) => {
+          const links = Array.from(document.querySelectorAll('a'));
+          const match = links.find(a => {
+            const t = a.textContent?.toLowerCase().trim() || '';
+            return t.includes(searchText.toLowerCase());
+          });
+          if (match) {
+            (match as HTMLAnchorElement).click();
+            return true;
+          }
+          return false;
+        }, linkText);
+
+        if (clicked) {
+          await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 }).catch(() => {});
+          await page.waitForTimeout(1000);
+          finalUrl = page.url();
+        }
+
+        title = await page.title();
+        content = await page.evaluate(() => {
+          const removeElements = document.querySelectorAll('script, style, nav, footer, iframe, noscript');
+          removeElements.forEach(el => el.remove());
+          const body = document.body;
+          if (!body) return '';
+          const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT);
+          const texts: string[] = [];
+          let node;
+          while (node = walker.nextNode()) {
+            const t = node.textContent?.trim();
+            if (t && t.length > 2) texts.push(t);
+          }
+          return texts.join('\n').slice(0, 12000);
+        });
+
+        const screenshotBuffer = await page.screenshot({ encoding: 'binary', type: 'jpeg', quality: 75 });
+        screenshot = `data:image/jpeg;base64,${Buffer.from(screenshotBuffer).toString('base64')}`;
+        break;
+      }
+
+      case 'scroll': {
+        // Full page screenshot
+        await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
+        await page.waitForTimeout(1000);
+        title = await page.title();
+        content = await page.evaluate(() => {
+          const removeElements = document.querySelectorAll('script, style, nav, footer, iframe, noscript');
+          removeElements.forEach(el => el.remove());
+          const body = document.body;
+          if (!body) return '';
+          return body.innerText.slice(0, 12000);
+        });
+
+        const screenshotBuffer = await page.screenshot({ encoding: 'binary', type: 'jpeg', quality: 70, fullPage: true });
+        screenshot = `data:image/jpeg;base64,${Buffer.from(screenshotBuffer).toString('base64')}`;
+        break;
+      }
+
+      case 'screenshot': {
+        await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
+        await page.waitForTimeout(1500);
+        title = await page.title();
+        const screenshotBuffer = await page.screenshot({ encoding: 'binary', type: 'jpeg', quality: 75 });
+        screenshot = `data:image/jpeg;base64,${Buffer.from(screenshotBuffer).toString('base64')}`;
+        break;
       }
 
       default:
-        return new Response(JSON.stringify({ error: 'Unknown action' }), {
-          status: 400,
-          headers: { 'Content-Type': 'application/json' },
-        });
+        return NextResponse.json({ error: 'unknown action' }, { status: 400 });
     }
-  } catch (err: any) {
-    return new Response(JSON.stringify({ error: err.message }), {
-      status: 500,
-      headers: { 'Content-Type': 'application/json' },
-    });
-  }
-}
 
-export async function GET() {
-  return new Response(JSON.stringify({
-    status: 'ok',
-    service: 'cozanet-browser',
-    actions: ['navigate', 'scrape', 'extractText', 'getLinks', 'search'],
-  }), {
-    headers: { 'Content-Type': 'application/json' },
-  });
+    await browser.close();
+    browser = null;
+
+    return NextResponse.json({
+      success: true,
+      url: finalUrl,
+      title,
+      content,
+      screenshot,
+      links,
+    });
+  } catch (err: any) {
+    console.error('[browser API] Error:', err.message);
+    if (browser) await browser.close().catch(() => {});
+    return NextResponse.json({ error: err.message, success: false }, { status: 500 });
+  }
 }

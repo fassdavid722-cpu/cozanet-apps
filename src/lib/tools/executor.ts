@@ -219,214 +219,82 @@ export async function executeTool(name: string, args: any): Promise<ToolResult> 
     }
 
     // ── Browser Navigate (Upgraded) ─────────────
+    // ── Browser Navigate (Real Chromium) ───────
     case 'browser_navigate': {
       try {
         let url = args.url;
         if (!url.startsWith('http')) url = `https://${url}`;
 
+        // Try real browser API first
+        try {
+          const browserResp = await fetch(
+            (process.env.NEXT_PUBLIC_URL || 'https://cozanet-chat.vercel.app') + '/api/browser',
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ action: 'navigate', url }),
+            }
+          );
+          if (browserResp.ok) {
+            const browserData = await browserResp.json();
+            if (browserData.success && browserData.content) {
+              return {
+                success: true,
+                data: {
+                  url: browserData.url,
+                  title: browserData.title,
+                  content: browserData.content,
+                  contentLength: browserData.content?.length || 0,
+                  links: browserData.links || [],
+                  via: 'chromium',
+                },
+                display: {
+                  type: 'browser',
+                  title: browserData.title,
+                  description: browserData.content?.slice(0, 200) || '',
+                  wordCount: browserData.content?.split(/\s+/).length || 0,
+                  via: 'chromium',
+                  screenshotUrl: browserData.screenshot,
+                },
+              };
+            }
+          }
+        } catch {}
+
+        // Fallback: fetch + Jina Reader
         const resp = await fetch(url, { headers: { 'User-Agent': UA } });
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-
         const html = await resp.text();
         const { headings, firstParagraph, content: fullText } = extractStructuredContent(html);
         const meta = extractPageMetadata(html, url);
         const text = fullText;
-        const links = args.extract_links ? extractLinks(html) : [];
 
-        // If content is too thin (likely JS-rendered), try Jina Reader
         if (text.length < 200 && !headings.length) {
           try {
-            const jinaResp = await fetch(`https://r.jina.ai/${url}`, {
-              headers: { 'Accept': 'text/plain' },
-            });
+            const jinaResp = await fetch(`https://r.jina.ai/${url}`, { headers: { 'Accept': 'text/plain' } });
             if (jinaResp.ok) {
               const jinaContent = await jinaResp.text();
               if (jinaContent.length > text.length) {
-                const wordCount = jinaContent.split(/\s+/).length;
                 return {
                   success: true,
-                  data: {
-                    url,
-                    title: meta.title,
-                    description: meta.description,
-                    content: jinaContent.slice(0, 12000),
-                    contentLength: jinaContent.length,
-                    wordCount,
-                    headings: headings.slice(0, 8),
-                    firstParagraph: jinaContent.split('\n').find((l: string) => l.trim().length > 50) || '',
-                    ogImage: meta.ogImage,
-                    via: 'jina-fallback',
-                    ...(links.length > 0 && { links }),
-                  },
-                  display: {
-                    type: 'browser',
-                    title: meta.title,
-                    items: [{ url, title: meta.title }],
-                    description: meta.description,
-                    excerpt: (jinaContent.slice(0, 200)).trim(),
-                    ogImage: meta.ogImage,
-                    siteName: meta.siteName,
-                    wordCount,
-                    via: 'jina-fallback',
-                    screenshotUrl: await captureScreenshot(url),
-                  },
+                  data: { url, title: meta.title, description: meta.description, content: jinaContent.slice(0, 12000), links: [], via: 'jina' } as any,
+                  display: { type: 'browser', title: meta.title, description: meta.description, via: 'jina', screenshotUrl: await captureScreenshot(url) },
                 };
               }
             }
           } catch {}
         }
 
-        const wordCount = text.split(/\s+/).length;
-
         return {
           success: true,
-          data: {
-            url,
-            title: meta.title,
-            description: meta.description,
-            content: text.slice(0, 12000),
-            contentLength: text.length,
-            wordCount,
-            headings: headings.slice(0, 8),
-            firstParagraph,
-            ogImage: meta.ogImage,
-            via: 'direct',
-            screenshotUrl: 'captured',
-            ...(links.length > 0 && { links }),
-          },
-          display: {
-            type: 'browser',
-            title: meta.title,
-            items: [{ url, title: meta.title }],
-            description: meta.description,
-            excerpt: firstParagraph.slice(0, 200) || text.slice(0, 200),
-            ogImage: meta.ogImage,
-            siteName: meta.siteName,
-            wordCount,
-            via: 'direct',
-            screenshotUrl: await captureScreenshot(url),
-          },
+          data: { url, title: meta.title, description: meta.description, content: text.slice(0, 12000), headings: headings.slice(0, 8), links: args.extract_links ? extractLinks(html) : [], via: 'fetch' },
+          display: { type: 'browser', title: meta.title, description: meta.description, via: 'fetch', screenshotUrl: await captureScreenshot(url) },
         };
       } catch (err: any) {
-        // Fallback to Jina Reader
-        try {
-          let url = args.url;
-          if (!url.startsWith('http')) url = `https://${url}`;
-          const jinaResp = await fetch(`https://r.jina.ai/${url}`, {
-            headers: { 'Accept': 'text/plain' },
-          });
-          if (jinaResp.ok) {
-            const content = await jinaResp.text();
-            const titleLine = content.split('\n').find((l: string) => l.trim().length > 0) || url;
-            const wordCount = content.split(/\s+/).length;
-            return {
-              success: true,
-              data: { url, title: titleLine, content: content.slice(0, 12000), contentLength: content.length, wordCount, via: 'jina' },
-              display: {
-                type: 'browser',
-                title: titleLine,
-                items: [{ url, title: titleLine }],
-                excerpt: content.slice(0, 200).trim(),
-                wordCount,
-                via: 'jina',
-                screenshotUrl: await captureScreenshot(url),
-              },
-            };
-          }
-        } catch {}
         return { success: false, data: { error: err.message } };
       }
     }
 
-
-    // ── Browser Interact (search/click/scroll on pages) ──
-    case 'browser_interact': {
-      try {
-        const action = args.action || 'search';
-        let url = args.url;
-        if (!url.startsWith('http')) url = `https://${url}`;
-
-        if (action === 'search') {
-          const query = args.query || args.value || '';
-          const searchUrl = buildSearchUrl(url, query);
-
-          const resp = await fetch(searchUrl, { headers: { 'User-Agent': UA } });
-          if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-
-          const html = await resp.text();
-          const { headings, firstParagraph, content: fullText } = extractStructuredContent(html);
-          const meta = extractPageMetadata(html, searchUrl);
-          const wordCount = fullText.split(/\s+/).length;
-          const links = extractLinks(html).slice(0, 12);
-
-          return {
-            success: true,
-            data: {
-              url: searchUrl, action: 'search', query,
-              title: meta.title, description: meta.description,
-              content: fullText.slice(0, 12000), wordCount,
-              headings: headings.slice(0, 8), firstParagraph, links, via: 'direct',
-            },
-            display: {
-              type: 'browser',
-              title: meta.title || `Search: ${query}`,
-              items: [{ url: searchUrl, title: meta.title || `Search: ${query}` }],
-              description: meta.description,
-              excerpt: firstParagraph.slice(0, 200) || fullText.slice(0, 200),
-              ogImage: meta.ogImage, siteName: meta.siteName,
-              wordCount, via: 'direct',
-              screenshotUrl: await captureScreenshot(searchUrl),
-            },
-          };
-        } else if (action === 'click') {
-          const linkText = args.value || args.text || '';
-          const resp = await fetch(url, { headers: { 'User-Agent': UA } });
-          if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-
-          const html = await resp.text();
-          const links = extractLinks(html);
-          const matched = links.find(l =>
-            l.text.toLowerCase().includes(linkText.toLowerCase()) ||
-            linkText.toLowerCase().includes(l.text.toLowerCase())
-          );
-
-          if (!matched) {
-            return { success: false, data: { error: `No link found matching "${linkText}" on ${url}`, availableLinks: links.slice(0, 10) } };
-          }
-
-          const linkResp = await fetch(matched.url, { headers: { 'User-Agent': UA } });
-          if (!linkResp.ok) throw new Error(`HTTP ${linkResp.status}`);
-          const linkHtml = await linkResp.text();
-          const { headings, firstParagraph, content: fullText } = extractStructuredContent(linkHtml);
-          const meta = extractPageMetadata(linkHtml, matched.url);
-          const wordCount = fullText.split(/\s+/).length;
-
-          return {
-            success: true,
-            data: { url: matched.url, action: 'click', clickedText: matched.text, title: meta.title, content: fullText.slice(0, 12000), wordCount, headings: headings.slice(0, 8), firstParagraph, via: 'direct' },
-            display: {
-              type: 'browser', title: meta.title, items: [{ url: matched.url, title: meta.title }],
-              description: meta.description, excerpt: firstParagraph.slice(0, 200) || fullText.slice(0, 200),
-              ogImage: meta.ogImage, siteName: meta.siteName, wordCount, via: 'direct',
-              screenshotUrl: await captureScreenshot(matched.url),
-            },
-          };
-        } else if (action === 'scroll') {
-          const fullPageShot = `https://image.thum.io/get/fullpage/${url}`;
-          return {
-            success: true,
-            data: { url, action: 'scroll', screenshotUrl: fullPageShot },
-            display: { type: 'browser', title: `Full page: ${url}`, items: [{ url, title: 'Full page screenshot' }], screenshotUrl: fullPageShot, via: 'screenshot' },
-          };
-        }
-
-        return { success: false, data: { error: `Unknown action: ${action}` } };
-      } catch (err: any) {
-        return { success: false, data: { error: err.message } };
-      }
-    }
-
-    // ── Browser Search (DuckDuckGo — Upgraded) ──
     case 'browser_search': {
       try {
         const searchUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(args.query)}`;
@@ -460,11 +328,102 @@ export async function executeTool(name: string, args: any): Promise<ToolResult> 
       }
     }
 
+    // ── Browser Interact (Real Chromium) ───────
+    case 'browser_interact': {
+      try {
+        let url = args.url;
+        if (!url.startsWith('http')) url = `https://${url}`;
+
+        // Use real browser API for interactions
+        const browserAction = args.action || 'search';
+        const browserBody: any = { action: browserAction, url };
+
+        if (browserAction === 'search') {
+          browserBody.query = args.query || args.value || '';
+        } else if (browserAction === 'click') {
+          browserBody.value = args.value || args.text || '';
+        }
+
+        const browserResp = await fetch(
+          (process.env.NEXT_PUBLIC_URL || 'https://cozanet-chat.vercel.app') + '/api/browser',
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(browserBody),
+          }
+        );
+
+        if (browserResp.ok) {
+          const browserData = await browserResp.json();
+          if (browserData.success) {
+            return {
+              success: true,
+              data: {
+                url: browserData.url,
+                title: browserData.title,
+                content: browserData.content,
+                action: browserAction,
+                via: 'chromium',
+              },
+              display: {
+                type: 'browser',
+                title: browserData.title,
+                description: browserData.content?.slice(0, 200) || '',
+                wordCount: browserData.content?.split(/\s+/).length || 0,
+                via: 'chromium',
+                screenshotUrl: browserData.screenshot,
+              },
+            };
+          }
+        }
+
+        // Fallback: basic search URL navigation
+        const searchUrl = buildSearchUrl(url, args.query || args.value || '');
+        const resp = await fetch(searchUrl, { headers: { 'User-Agent': UA } });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const html = await resp.text();
+        const meta = extractPageMetadata(html, searchUrl);
+        const { content: fullText } = extractStructuredContent(html);
+
+        return {
+          success: true,
+          data: { url: searchUrl, title: meta.title, content: fullText.slice(0, 12000), action: browserAction, via: 'fetch' },
+          display: { type: 'browser', title: meta.title, via: 'fetch', screenshotUrl: await captureScreenshot(searchUrl) },
+        };
+      } catch (err: any) {
+        return { success: false, data: { error: err.message } };
+      }
+    }
+
     // ── Jina Reader (Upgraded) ───────────────────
     case 'jina_reader': {
       try {
         let url = args.url;
         if (!url.startsWith('http')) url = `https://${url}`;
+
+        // Try real browser API first for better screenshots
+        try {
+          const browserResp = await fetch(
+            (process.env.NEXT_PUBLIC_URL || 'https://cozanet-chat.vercel.app') + '/api/browser',
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ action: 'navigate', url }),
+            }
+          );
+          if (browserResp.ok) {
+            const browserData = await browserResp.json();
+            if (browserData.success && browserData.content) {
+              return {
+                success: true,
+                data: { url, title: browserData.title, content: browserData.content.slice(0, 12000), contentLength: browserData.content?.length || 0, wordCount: browserData.content?.split(/\s+/).length || 0, via: 'chromium' },
+                display: { type: 'browser', title: browserData.title, via: 'chromium', screenshotUrl: browserData.screenshot },
+              };
+            }
+          }
+        } catch {}
+
+        // Fallback: Jina Reader API
         const resp = await fetch(`https://r.jina.ai/${url}`, {
           headers: { 'Accept': 'text/plain' },
         });
@@ -505,7 +464,7 @@ export async function executeTool(name: string, args: any): Promise<ToolResult> 
           method: 'POST',
           headers: { ...HEADERS, 'Prefer': 'return=minimal' },
           body: JSON.stringify({
-            memory_type: 'LONG_TERM',
+            memory_type: 'MEMORY',
             content: args.content,
             importance: args.importance || 5,
             source: args.category || 'context',
@@ -534,7 +493,7 @@ export async function executeTool(name: string, args: any): Promise<ToolResult> 
           'Content-Type': 'application/json',
         };
 
-        let url = `${SUPABASE_URL}/rest/v1/ai_memory?memory_type=eq.LONG_TERM&is_active=eq.true&order=importance.desc&limit=10`;
+        let url = `${SUPABASE_URL}/rest/v1/ai_memory?memory_type=eq.MEMORY&is_active=eq.true&order=importance.desc&limit=10`;
 
         const resp = await fetch(url, { headers: HEADERS });
         if (!resp.ok) throw new Error('Memory recall failed');
