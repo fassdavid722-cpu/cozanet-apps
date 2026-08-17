@@ -102,6 +102,26 @@ You have a virtual file system for managing code projects:
 - secret_delete: Delete a stored secret
 - Use these to build multi-file projects, save code for later, or organize work.
 
+## WAIT & ASYNC OPERATIONS
+You can WAIT for things to complete before continuing. This is crucial for multi-step workflows:
+- wait_for_deployment: Poll a Vercel deployment until it is READY or ERROR. Use after triggering a deployment (git push, API call, etc.) to know when the app is live. Sends progress updates every 5 seconds.
+- wait_for_page: Poll a URL until it has meaningful content. Use after deploying to verify the app is serving, or when a page needs time to load (SPAs, SSR, async data).
+- wait_for_github_action: Poll a GitHub Actions run until it completes (success/failure). Use after pushing code that triggers CI/CD.
+- wait_duration: Simple timer wait. Use for rate limits, cooldowns, or letting a process start before checking.
+
+**WHEN TO WAIT:**
+- After pushing code to GitHub → wait_for_deployment to confirm the Vercel build succeeded
+- After triggering a build → wait_for_page to verify the app is actually serving content
+- After starting a CI/CD pipeline → wait_for_github_action to see if tests pass
+- When a page loads slowly → wait_for_page with search_text to confirm specific content appeared
+- When rate-limited → wait_duration before retrying
+
+**MULTI-STEP WORKFLOW EXAMPLE:**
+1. Push code to GitHub (github_push)
+2. Wait for deployment to finish (wait_for_deployment)
+3. Verify the app is live (wait_for_page)
+4. Report results to the user
+
 ## OTHER CAPABILITIES
 - Web search and browsing for current information
 - Image/screenshot analysis via vision
@@ -148,6 +168,13 @@ interface SSEData {
   via?: string;
   screenshot?: string;
   screenshotUrl?: string;
+  // Wait & poll fields
+  waiting?: boolean;
+  waitDetail?: string;
+  waitAttempt?: number;
+  waitMaxAttempts?: number;
+  waitElapsedMs?: number;
+  waitResult?: any;
   image?: string;
   keyDetected?: { serviceName: string; keyName: string; masked: string; stored: boolean; error?: string }[];
   secretSaved?: { name: string; service: string; stored: boolean };
@@ -604,7 +631,12 @@ export async function POST(req: NextRequest) {
             }
 
             // Execute the tool
-            const result = await executeTool(toolName, { ...args, _sessionId: sessionId });
+            const result = await executeTool(toolName, { ...args, _sessionId: sessionId }, (p: any) => {
+              // Send wait progress as SSE events
+              if (p.status === 'waiting' || p.status === 'checking' || p.status === 'ready' || p.status === 'error' || p.status === 'timeout') {
+                send(p);
+              }
+            });
 
             // Rich display for browser tools — send screenshot field
             if (result.display?.screenshotUrl) {

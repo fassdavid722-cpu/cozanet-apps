@@ -24,6 +24,9 @@ import {
 import {
   auditCode, fixAllIssues, generateFix,
 } from '@/lib/code-intelligence';
+import {
+  waitForVercelDeployment, waitForPageContent, waitForGitHubAction, waitDuration,
+} from '@/lib/wait-engine';
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
@@ -193,7 +196,7 @@ export interface ToolResult {
   };
 }
 
-export async function executeTool(name: string, args: any): Promise<ToolResult> {
+export async function executeTool(name: string, args: any, onProgress?: (p: any) => void): Promise<ToolResult> {
   switch (name) {
     // ── Web Search ──────────────────────────────
     case 'web_search': {
@@ -1121,6 +1124,120 @@ export async function executeTool(name: string, args: any): Promise<ToolResult> 
           success: true,
           data: { translated, sourceLang: detectedLang, targetLang: args.target_lang },
           display: { type: 'translation', title: `→ ${args.target_lang}`, items: [{ original: args.text.slice(0, 100), translated: translated.slice(0, 100) }] },
+        };
+      } catch (err: any) {
+        return { success: false, data: { error: err.message } };
+      }
+    }
+
+    // ── Wait & Poll Tools ───────────────────────────
+    case 'wait_for_deployment': {
+      try {
+        const vercelKey = process.env.VERCEL_API_KEY || process.env.VERCEL_API_TOKEN || '';
+        if (!vercelKey) {
+          return { success: false, data: { error: 'No Vercel API key configured. Set VERCEL_API_KEY environment variable.' } };
+        }
+        const result = await waitForVercelDeployment(
+          args.deployment_id,
+          args.team_id,
+          vercelKey,
+          {
+            maxWaitMs: (args.max_wait_seconds || 120) * 1000,
+            pollIntervalMs: 5000,
+            onProgress: (p) => onProgress?.({ status: 'waiting', waitDetail: p.detail, waitAttempt: p.attempt, waitMaxAttempts: p.maxAttempts, waitElapsedMs: p.elapsedTime }),
+          }
+        );
+        return {
+          success: result.ready,
+          data: {
+            ready: result.ready,
+            state: result.state,
+            url: result.url,
+            error: result.error,
+          },
+          display: {
+            type: 'info' as any,
+            title: result.ready ? `Deployment Ready!` : `Deployment ${result.state}`,
+          },
+        };
+      } catch (err: any) {
+        return { success: false, data: { error: err.message } };
+      }
+    }
+
+    case 'wait_for_page': {
+      try {
+        const result = await waitForPageContent(args.url, {
+          searchText: args.search_text,
+          minContentLength: args.min_content_length,
+          maxWaitMs: (args.max_wait_seconds || 60) * 1000,
+          pollIntervalMs: 3000,
+          onProgress: (p) => onProgress?.({ status: 'waiting', waitDetail: p.detail, waitAttempt: p.attempt, waitMaxAttempts: p.maxAttempts, waitElapsedMs: p.elapsedTime }),
+        });
+        return {
+          success: result.ready,
+          data: {
+            ready: result.ready,
+            title: result.title,
+            content: result.content,
+            error: result.error,
+          },
+          display: {
+            type: 'info' as any,
+            title: result.ready ? `Page loaded: ${result.title || args.url}` : `Page not ready: ${result.error || 'timeout'}`,
+          },
+        };
+      } catch (err: any) {
+        return { success: false, data: { error: err.message } };
+      }
+    }
+
+    case 'wait_for_github_action': {
+      try {
+        const ghToken = process.env.GITHUB_TOKEN || process.env.GITHUB_ACCESS_TOKEN || '';
+        if (!ghToken) {
+          return { success: false, data: { error: 'No GitHub token configured.' } };
+        }
+        const result = await waitForGitHubAction(
+          args.owner,
+          args.repo,
+          args.run_id,
+          ghToken,
+          {
+            maxWaitMs: (args.max_wait_seconds || 180) * 1000,
+            pollIntervalMs: 10000,
+            onProgress: (p) => onProgress?.({ status: 'waiting', waitDetail: p.detail, waitAttempt: p.attempt, waitMaxAttempts: p.maxAttempts, waitElapsedMs: p.elapsedTime }),
+          }
+        );
+        return {
+          success: result.ready,
+          data: {
+            ready: result.ready,
+            conclusion: result.conclusion,
+            state: result.state,
+            error: result.error,
+          },
+          display: {
+            type: 'info' as any,
+            title: result.ready ? `GitHub Action: ${result.conclusion}` : `Action ${result.state}`,
+          },
+        };
+      } catch (err: any) {
+        return { success: false, data: { error: err.message } };
+      }
+    }
+
+    case 'wait_duration': {
+      try {
+        const seconds = Math.min(args.seconds || 5, 120);
+        await waitDuration(seconds * 1000, (p) => onProgress?.({ status: 'waiting', waitDetail: p.detail, waitAttempt: p.attempt, waitMaxAttempts: p.maxAttempts, waitElapsedMs: p.elapsedTime }));
+        return {
+          success: true,
+          data: { waited: seconds, reason: args.reason || 'cooldown' },
+          display: {
+            type: 'info' as any,
+            title: `Waited ${seconds}s`,
+          },
         };
       } catch (err: any) {
         return { success: false, data: { error: err.message } };

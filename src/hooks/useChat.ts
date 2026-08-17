@@ -3,7 +3,7 @@ import { useState, useCallback, useRef } from 'react';
 
 export interface Activity {
   id: string;
-  type: 'thinking' | 'searching' | 'browsed' | 'searched' | 'browsing' | 'generating' | 'tool' | 'weather' | 'memory' | 'calculating' | 'translating' | 'code_running' | 'error' | 'screenshot' | 'key_detected';
+  type: 'thinking' | 'searching' | 'browsed' | 'searched' | 'browsing' | 'generating' | 'tool' | 'weather' | 'memory' | 'calculating' | 'translating' | 'code_running' | 'error' | 'screenshot' | 'key_detected' | 'waiting';
   label: string;
   detail?: string;
   timestamp: number;
@@ -19,6 +19,10 @@ export interface Activity {
   screenshotUrl?: string;
   images?: string[];
   keys?: { serviceName: string; keyName: string; masked: string; stored: boolean; error?: string }[];
+  // Wait & poll fields
+  waitAttempt?: number;
+  waitMaxAttempts?: number;
+  waitElapsedMs?: number;
 }
 
 export interface Message {

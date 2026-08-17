@@ -47,6 +47,13 @@ function statusLabel(activity: Activity): string {
     case 'tool': return activity.label;
     case 'error': return activity.label;
     case 'key_detected': return '🔐 API key detected & saved';
+    case 'waiting': {
+      const attempt = activity.waitAttempt || 0;
+      const max = activity.waitMaxAttempts || 0;
+      const elapsed = activity.waitElapsedMs || 0;
+      const elapsedSec = Math.round(elapsed / 1000);
+      return max > 0 ? `${activity.detail || 'Waiting...'} (${attempt}/${max}, ${elapsedSec}s)` : (activity.detail || 'Waiting...');
+    }
     default: return activity.label;
   }
 }
@@ -456,14 +463,39 @@ export default function ChatPage() {
                     <div className="bubble-col">
                       {currentActivities.slice(-1).map((act) => (
                         <div key={act.id}>
-                          <div className="status-line">
-                            <span className="status-spinner" />
-                            {statusLabel(act)}
-                          </div>
-                          {act.screenshotUrl && (
-                            <div className="live-shot" onClick={() => setExpandedShot(act.screenshotUrl!)}>
-                              <img src={act.screenshotUrl} alt="browsing screenshot" />
+                          {act.type === 'waiting' ? (
+                            <div className="wait-card">
+                              <div className="wait-header">
+                                <span className="wait-spinner" />
+                                <span className="wait-label">{statusLabel(act)}</span>
+                              </div>
+                              {act.waitMaxAttempts && act.waitMaxAttempts > 0 && (
+                                <div className="wait-progress-bar">
+                                  <div
+                                    className="wait-progress-fill"
+                                    style={{ width: `${Math.min(((act.waitAttempt || 0) / act.waitMaxAttempts) * 100, 100)}%` }}
+                                  />
+                                </div>
+                              )}
+                              {act.waitAttempt && act.waitAttempt > 0 && (
+                                <div className="wait-attempts">
+                                  Attempt {act.waitAttempt}{act.waitMaxAttempts ? ` of ${act.waitMaxAttempts}` : ''} ·
+                                  {' '}{Math.round((act.waitElapsedMs || 0) / 1000)}s elapsed
+                                </div>
+                              )}
                             </div>
+                          ) : (
+                            <>
+                              <div className="status-line">
+                                <span className="status-spinner" />
+                                {statusLabel(act)}
+                              </div>
+                              {act.screenshotUrl && (
+                                <div className="live-shot" onClick={() => setExpandedShot(act.screenshotUrl!)}>
+                                  <img src={act.screenshotUrl} alt="browsing screenshot" />
+                                </div>
+                              )}
+                            </>
                           )}
                         </div>
                       ))}
