@@ -11,19 +11,36 @@ let pyodidePromise: Promise<any> | null = null;
 const PYODIDE_VERSION = '0.26.4';
 const PYODIDE_CDN = `https://cdn.jsdelivr.net/pyodide/v${PYODIDE_VERSION}/full/`;
 
+// Load Pyodide from CDN using fetch + eval to avoid webpack bundling issues
+async function loadPyodideFromCDN(): Promise<any> {
+  // Fetch the Pyodide module source from CDN
+  const resp = await fetch(`${PYODIDE_CDN}pyodide.mjs`);
+  if (!resp.ok) throw new Error(`Failed to fetch Pyodide: ${resp.status}`);
+  const code = await resp.text();
+
+  // Convert ES module to a function we can call
+  // Pyodide's mjs exports loadPyodide as a named export
+  // We eval it in a custom module scope
+  const moduleScope: any = { exports: {} };
+  const moduleFunc = new Function('module', 'exports', 'fetch', 'URL', 'globalThis', code + '\n; return module.exports;');
+  moduleFunc(moduleScope, moduleScope.exports, fetch, URL, globalThis);
+
+  // The module should have set loadPyodide on exports or globalThis
+  const loadPyodide = moduleScope.exports.loadPyodide || (globalThis as any).loadPyodide;
+  if (!loadPyodide) throw new Error('loadPyodide not found after eval');
+
+  const pyodide = await loadPyodide({ indexURL: PYODIDE_CDN });
+  return pyodide;
+}
+
 async function getPyodide(): Promise<any> {
   if (pyodideInstance) return pyodideInstance;
   if (pyodidePromise) return pyodidePromise;
 
-  pyodidePromise = (async () => {
-    // Dynamic import from CDN
-    const pyodideModule = await import(/* @vite-ignore */ /* webpackIgnore: true */ `${PYODIDE_CDN}pyodide.mjs`);
-    const pyodide = await pyodideModule.loadPyodide({
-      indexURL: PYODIDE_CDN,
-    });
+  pyodidePromise = loadPyodideFromCDN().then((pyodide: any) => {
     pyodideInstance = pyodide;
     return pyodide;
-  })();
+  });
 
   return pyodidePromise;
 }
