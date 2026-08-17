@@ -3,7 +3,7 @@ import { useState, useCallback, useRef } from 'react';
 
 export interface Activity {
   id: string;
-  type: 'thinking' | 'searching' | 'browsed' | 'searched' | 'browsing' | 'generating' | 'tool' | 'weather' | 'memory' | 'calculating' | 'translating' | 'code_running' | 'error' | 'screenshot';
+  type: 'thinking' | 'searching' | 'browsed' | 'searched' | 'browsing' | 'generating' | 'tool' | 'weather' | 'memory' | 'calculating' | 'translating' | 'code_running' | 'error' | 'screenshot' | 'key_detected';
   label: string;
   detail?: string;
   timestamp: number;
@@ -18,6 +18,7 @@ export interface Activity {
   via?: string;
   screenshotUrl?: string;
   images?: string[];
+  keys?: { serviceName: string; keyName: string; masked: string; stored: boolean; error?: string }[];
 }
 
 export interface Message {
@@ -279,6 +280,22 @@ export function useChat(sessionId: string) {
             });
           } else if (parsed.status === 'generating') {
             setCurrentActivities([]);
+          } else if (parsed.status === 'key_detected') {
+            // API key was auto-detected and stored
+            const keys = parsed.keyDetected || [];
+            if (keys.length > 0) {
+              const keyLabels = keys.map((k: any) => 
+                `🔐 ${k.serviceName} → ${k.keyName} (${k.stored ? '✓ saved' : '✗ ' + (k.error || 'failed')})`
+              );
+              addActivity(assistantId, {
+                id: makeActivityId(),
+                type: 'key_detected',
+                label: 'API key detected',
+                detail: keyLabels.join('\n'),
+                keys,
+                timestamp: Date.now(),
+              });
+            }
           }
 
           if (parsed.done) { streamDone = true; break; }

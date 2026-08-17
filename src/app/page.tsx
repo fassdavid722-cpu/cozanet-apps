@@ -46,6 +46,7 @@ function statusLabel(activity: Activity): string {
     case 'code_running': return 'Running code…';
     case 'tool': return activity.label;
     case 'error': return activity.label;
+    case 'key_detected': return '🔐 API key detected & saved';
     default: return activity.label;
   }
 }
@@ -404,6 +405,30 @@ export default function ChatPage() {
                     )}
                   </div>
                 </div>
+
+                {/* API key detection cards */}
+                {(m.activities || []).filter(a => a.type === 'key_detected' && a.keys).map((act) => (
+                  <div key={act.id} className="msg-row assistant">
+                    <div className="bubble-col">
+                      <div className="key-detected-card">
+                        <div className="key-detected-header">
+                          <span className="key-icon">🔐</span>
+                          <span className="key-title">API Key Auto-Detected</span>
+                        </div>
+                        {act.keys!.map((k, i) => (
+                          <div key={i} className={`key-item ${k.stored ? 'key-stored' : 'key-failed'}`}>
+                            <div className="key-service">{k.serviceName}</div>
+                            <div className="key-name">{k.keyName}</div>
+                            <div className="key-value">{k.masked}</div>
+                            <div className="key-status">
+                              {k.stored ? '✓ Saved' : `✗ ${k.error || 'Failed'}`}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                ))}
 
                 {/* Screenshot thumbnails from completed browse activities */}
                 {msgScreenshots.length > 0 && m.content && (

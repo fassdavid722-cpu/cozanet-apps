@@ -21,6 +21,8 @@ import { NextRequest } from 'next/server';
 import { TOOLS } from '@/lib/tools/registry';
 import { executeTool } from '@/lib/tools/executor';
 import { saveMessage, getHistory, saveMemory, getMemories } from '@/lib/memory';
+import { detectApiKeys, redactKeys } from '@/lib/key-detector';
+import { secretStore, secretList, getAllSecretsForSandbox } from '@/lib/sandbox';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -147,6 +149,8 @@ interface SSEData {
   screenshot?: string;
   screenshotUrl?: string;
   image?: string;
+  keyDetected?: { serviceName: string; keyName: string; masked: string; stored: boolean; error?: string }[];
+  secretSaved?: { name: string; service: string; stored: boolean };
 }
 
 function callGroq(messages: any[], tools?: any[], toolChoice?: string, model?: string) {
@@ -413,6 +417,64 @@ export async function POST(req: NextRequest) {
         const history = await getHistory(sessionId, 20);
         saveMessage(sessionId, 'user', userMessage || '[image]');
 
+        // ── API KEY DETECTION ──
+        // Scan the user's message for API keys and auto-save them as secrets
+        let detectedKeys: { serviceName: string; keyName: string; masked: string; stored: boolean; error?: string }[] = [];
+        if (userMessage) {
+          const detected = detectApiKeys(userMessage);
+          if (detected.length > 0) {
+            // Check which keys are already stored to avoid duplicates
+            const existingSecrets = await secretList();
+            const existingNames = existingSecrets.success 
+              ? (existingSecrets.secrets || []).map((s: any) => s.key_name) 
+              : [];
+
+            for (const key of detected) {
+              const masked = key.value.substring(0, 8) + '••••••••' + key.value.substring(key.value.length - 4);
+              
+              if (existingNames.includes(key.keyName)) {
+                // Key already stored — skip but inform user
+                detectedKeys.push({
+                  serviceName: key.serviceName,
+                  keyName: key.keyName,
+                  masked,
+                  stored: true,
+                  error: 'already stored (skipped)',
+                });
+                continue;
+              }
+
+              // Store the key
+              const storeResult = await secretStore(
+                key.keyName,
+                key.value,
+                key.serviceName,
+                `Auto-detected from chat — ${key.serviceName} API key`,
+              );
+
+              detectedKeys.push({
+                serviceName: key.serviceName,
+                keyName: key.keyName,
+                masked,
+                stored: storeResult.success,
+                error: storeResult.error,
+              });
+            }
+
+            // Notify the frontend about detected keys
+            if (detectedKeys.length > 0) {
+              send({ 
+                status: 'key_detected', 
+                keyDetected: detectedKeys,
+              });
+            }
+
+            // Redact the keys from the message before sending to the LLM
+            // (so the LLM doesn't see the actual key values)
+            userMessage = redactKeys(userMessage, detected);
+          }
+        }
+
         send({ status: 'thinking' });
 
         const hasImages = images.length > 0;
@@ -465,7 +527,8 @@ export async function POST(req: NextRequest) {
             saveMessage(sessionId, 'assistant', fullResponse);
           }
 
-          send({ done: true });
+          // Include key detection info if any keys were detected
+        send({ done: true });
           return;
         }
 
