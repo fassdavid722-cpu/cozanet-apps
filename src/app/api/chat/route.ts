@@ -518,29 +518,24 @@ export async function POST(req: NextRequest) {
             });
           }
 
-          // Build follow-up messages with tool results
+          // Build follow-up as plain conversation (avoids GPT-OSS re-calling tools)
+          const toolResults = toolMessages.map(tm => 
+            `[Tool: ${tm.name}] Result:\n${tm.content}`
+          ).join('\n\n');
+          
           const followUpMessages = [
             ...messages,
-            {
-              role: 'assistant',
-              content: null,
-              tool_calls: parsedToolCalls.map(tc => ({
-                id: tc.id,
-                type: 'function',
-                function: { name: tc.function.name, arguments: tc.function.arguments },
-              })),
-            },
-            ...toolMessages,
+            { role: 'assistant', content: 'I executed the requested tools. Let me analyze the results.' },
+            { role: 'user', content: `Tool execution results:\n\n${toolResults}\n\nPlease provide a clear response based on these results.` },
           ];
 
-          // Step 2: Call Groq again with tool results (non-streaming for reliability)
+          // Step 2: Call Groq with results as plain conversation (non-streaming)
           const followUpBody: any = {
             model: GROQ_TOOL_MODEL,
             messages: followUpMessages,
             max_tokens: 2048,
             temperature: 0.7,
             stream: false,
-            tool_choice: 'none',
           };
           const finalResp = await fetch('https://api.groq.com/openai/v1/chat/completions', {
             method: 'POST',
