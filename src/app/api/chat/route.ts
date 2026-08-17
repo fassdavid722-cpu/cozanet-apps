@@ -540,6 +540,7 @@ export async function POST(req: NextRequest) {
             max_tokens: 2048,
             temperature: 0.7,
             stream: false,
+            tool_choice: 'none',
           };
           const finalResp = await fetch('https://api.groq.com/openai/v1/chat/completions', {
             method: 'POST',
