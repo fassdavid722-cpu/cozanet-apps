@@ -408,6 +408,117 @@ export const TOOLS: ToolDefinition[] = [
       },
     },
   },
+  // ── Deep Research & Learning Tools ──
+  {
+    type: 'function',
+    function: {
+      name: 'deep_research',
+      description: 'Deep research a topic — searches multiple angles, reads top sources, extracts key facts, and stores the knowledge for future recall. Use when the user asks to "learn about", "research", "study", "investigate", or "look into" something. Takes quality time (30-90 seconds depending on depth). Depth: "quick" (1 query, ~10s), "standard" (3 queries, ~30s), "deep" (5 queries, ~60-90s).',
+      parameters: {
+        type: 'object',
+        properties: {
+          topic: { type: 'string', description: 'The topic to research' },
+          depth: { type: 'string', enum: ['quick', 'standard', 'deep'], description: 'Research depth (default: standard)' },
+        },
+        required: ['topic'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'knowledge_recall',
+      description: 'Recall previously learned knowledge about a topic. Check what the AI already knows before researching. Returns stored entries with confidence scores and freshness dates.',
+      parameters: {
+        type: 'object',
+        properties: {
+          topic: { type: 'string', description: 'The topic to recall knowledge about' },
+          exact: { type: 'boolean', description: 'If true, only match exact topic name. If false, fuzzy search across all fields.' },
+        },
+        required: ['topic'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'knowledge_list',
+      description: 'List all topics in the knowledge base. Shows what the AI has learned so far.',
+      parameters: {
+        type: 'object',
+        properties: {
+          category: { type: 'string', description: 'Filter by category (optional)' },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'knowledge_store',
+      description: 'Store learned knowledge about a topic. Use after researching or learning something new so it persists for future conversations.',
+      parameters: {
+        type: 'object',
+        properties: {
+          topic: { type: 'string', description: 'The topic name' },
+          content: { type: 'string', description: 'The full content to store (markdown)' },
+          category: { type: 'string', description: 'Category: tech, science, business, general, research' },
+          summary: { type: 'string', description: 'Short summary for quick recall' },
+          sources: { type: 'array', items: { type: 'string' }, description: 'URL sources' },
+          confidence: { type: 'number', description: 'Confidence level 0-1' },
+          tags: { type: 'array', items: { type: 'string' }, description: 'Tags for searchability' },
+        },
+        required: ['topic', 'content'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'knowledge_delete',
+      description: 'Delete a stored knowledge entry by topic.',
+      parameters: {
+        type: 'object',
+        properties: {
+          topic: { type: 'string', description: 'The topic to delete' },
+        },
+        required: ['topic'],
+      },
+    },
+  },
+  // ── Code Intelligence Tools ──
+  {
+    type: 'function',
+    function: {
+      name: 'code_audit',
+      description: 'Audit code for bugs, security issues, performance problems, and style issues. Returns a health score (0-100), list of issues with severity, and optionally runs the code to verify. Use when the user asks to "review", "audit", "check", or "analyze" code.',
+      parameters: {
+        type: 'object',
+        properties: {
+          code: { type: 'string', description: 'The code to audit' },
+          language: { type: 'string', description: 'Language: javascript, typescript, python, etc.' },
+          run_tests: { type: 'boolean', description: 'Whether to also execute the code to verify (default: true)' },
+        },
+        required: ['code'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'code_fix',
+      description: 'Automatically fix common code issues (security, bugs, performance). Returns the fixed code, number of changes made, and the new health score. Use after code_audit or when the user asks to "fix" or "improve" code.',
+      parameters: {
+        type: 'object',
+        properties: {
+          code: { type: 'string', description: 'The code to fix' },
+          language: { type: 'string', description: 'Language: javascript, typescript, python, etc.' },
+        },
+        required: ['code'],
+      },
+    },
+  },
 ];
 
 export const TOOL_NAMES = TOOLS.map(t => t.function.name);

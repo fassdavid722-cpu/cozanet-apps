@@ -15,6 +15,15 @@ import {
   githubPush, githubListRepos, githubListFiles, githubReadFile,
   secretStore, secretGet, secretList, secretDelete, getAllSecretsForSandbox,
 } from '@/lib/sandbox';
+import {
+  knowledgeStore, knowledgeRecall, knowledgeList, knowledgeDelete, knowledgeFreshness,
+} from '@/lib/knowledge';
+import {
+  deepResearch, quickResearch, exhaustiveResearch,
+} from '@/lib/deep-research';
+import {
+  auditCode, fixAllIssues, generateFix,
+} from '@/lib/code-intelligence';
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
@@ -170,7 +179,7 @@ export interface ToolResult {
   success: boolean;
   data: any;
   display?: {
-    type: 'search_results' | 'browser' | 'weather' | 'memory_saved' | 'memory_recalled' | 'calculation' | 'code_output' | 'metadata' | 'translation' | 'time';
+    type: 'search_results' | 'browser' | 'weather' | 'memory_saved' | 'memory_recalled' | 'calculation' | 'code_output' | 'metadata' | 'translation' | 'time' | 'research' | 'knowledge' | 'knowledge_list' | 'info' | 'code_audit' | 'code_fix';
     title?: string;
     items?: any[];
     // New: rich browser display data
@@ -895,6 +904,202 @@ export async function executeTool(name: string, args: any): Promise<ToolResult> 
           success: result.success,
           data: { key_name: args.key_name, deleted: result.success, error: result.error },
           display: { type: 'metadata', title: result.success ? 'Secret deleted' : 'Error', items: [{ key: args.key_name, error: result.error }] },
+        };
+      } catch (err: any) {
+        return { success: false, data: { error: err.message } };
+      }
+    }
+
+    // ── Deep Research (Learning) ────────────────
+    case 'deep_research': {
+      try {
+        const topic = args.topic;
+        const depth = args.depth || 'standard';
+        
+        let result;
+        if (depth === 'quick') {
+          result = await quickResearch(topic);
+        } else if (depth === 'deep' || depth === 'exhaustive') {
+          result = await exhaustiveResearch(topic);
+        } else {
+          result = await deepResearch(topic);
+        }
+
+        return {
+          success: true,
+          data: {
+            topic: result.topic,
+            summary: result.summary,
+            facts: result.facts,
+            sources: result.sources,
+            confidence: result.confidence,
+            duration_ms: result.duration,
+            stored: result.stored,
+            steps: result.steps.map(s => ({ step: s.step, status: s.status, detail: s.detail })),
+          },
+          display: {
+            type: 'research',
+            title: `Research: ${topic}`,
+            items: [{
+              summary: result.summary,
+              facts: result.facts,
+              sources: result.sources,
+              steps: result.steps,
+              duration: result.duration,
+            }],
+          },
+        };
+      } catch (err: any) {
+        return { success: false, data: { error: err.message } };
+      }
+    }
+
+    // ── Knowledge Recall ─────────────────────────
+    case 'knowledge_recall': {
+      try {
+        const topic = args.topic;
+        const exact = args.exact || false;
+        const result = await knowledgeRecall(topic, exact);
+        return {
+          success: result.success,
+          data: { entries: result.entries, error: result.error },
+          display: {
+            type: 'knowledge',
+            title: `Knowledge: ${topic}`,
+            items: (result.entries || []).map((e: any) => ({
+              topic: e.topic,
+              summary: e.summary,
+              confidence: e.confidence,
+              freshness: e.freshness,
+              sources: e.sources,
+            })),
+          },
+        };
+      } catch (err: any) {
+        return { success: false, data: { error: err.message } };
+      }
+    }
+
+    // ── Knowledge List ──────────────────────────
+    case 'knowledge_list': {
+      try {
+        const category = args.category;
+        const result = await knowledgeList(category);
+        return {
+          success: result.success,
+          data: { entries: result.entries, error: result.error },
+          display: {
+            type: 'knowledge_list',
+            title: 'Knowledge Base',
+            items: result.entries || [],
+          },
+        };
+      } catch (err: any) {
+        return { success: false, data: { error: err.message } };
+      }
+    }
+
+    // ── Knowledge Store ─────────────────────────
+    case 'knowledge_store': {
+      try {
+        const result = await knowledgeStore(
+          args.topic,
+          args.content,
+          {
+            category: args.category,
+            summary: args.summary,
+            sources: args.sources,
+            confidence: args.confidence,
+            tags: args.tags,
+          },
+        );
+        return {
+          success: result.success,
+          data: { stored: result.success, id: result.id, error: result.error },
+          display: {
+            type: 'info',
+            title: 'Knowledge Stored',
+            items: [{ topic: args.topic, stored: result.success }],
+          },
+        };
+      } catch (err: any) {
+        return { success: false, data: { error: err.message } };
+      }
+    }
+
+    // ── Knowledge Delete ────────────────────────
+    case 'knowledge_delete': {
+      try {
+        const result = await knowledgeDelete(args.topic);
+        return {
+          success: result.success,
+          data: { deleted: result.success, error: result.error },
+        };
+      } catch (err: any) {
+        return { success: false, data: { error: err.message } };
+      }
+    }
+
+    // ── Code Audit ──────────────────────────────
+    case 'code_audit': {
+      try {
+        const code = args.code;
+        const language = args.language || 'javascript';
+        const runTests = args.run_tests !== false;
+        
+        const result = await auditCode(code, language, runTests);
+        
+        return {
+          success: true,
+          data: {
+            issues: result.issues,
+            score: result.score,
+            summary: result.summary,
+            tests_passed: result.testsPassed,
+            test_output: result.testOutput,
+          },
+          display: {
+            type: 'code_audit',
+            title: 'Code Audit Results',
+            items: [{
+              score: result.score,
+              issueCount: result.issues.length,
+              issues: result.issues,
+              testsPassed: result.testsPassed,
+              testOutput: result.testOutput,
+            }],
+          },
+        };
+      } catch (err: any) {
+        return { success: false, data: { error: err.message } };
+      }
+    }
+
+    // ── Code Fix (auto-fix issues) ──────────────
+    case 'code_fix': {
+      try {
+        const code = args.code;
+        const language = args.language || 'javascript';
+        const result = await fixAllIssues(code, language);
+        
+        return {
+          success: true,
+          data: {
+            fixed_code: result.fixedCode,
+            changes: result.changes,
+            new_score: result.auditResult.score,
+            remaining_issues: result.auditResult.issues.length,
+          },
+          display: {
+            type: 'code_fix',
+            title: 'Auto-Fix Results',
+            items: [{
+              changes: result.changes,
+              newScore: result.auditResult.score,
+              remainingIssues: result.auditResult.issues.length,
+              fixedCode: result.fixedCode,
+            }],
+          },
         };
       } catch (err: any) {
         return { success: false, data: { error: err.message } };
