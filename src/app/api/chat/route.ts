@@ -27,7 +27,7 @@ export const dynamic = 'force-dynamic';
 
 const GROQ_API_KEY = process.env.GROQ_API_KEY || '';
 const GROQ_MODEL = 'llama-3.3-70b-versatile';
-const GROQ_TOOL_MODEL = 'llama-3.1-8b-instant';
+const GROQ_TOOL_MODEL = 'llama3-8b-8192';
 const GROQ_VISION_MODEL = 'meta-llama/llama-3.2-90b-vision-preview';
 
 const SYSTEM_PROMPT = `You are CozanetOS, an intelligent personal AI assistant with memory and web browsing capabilities.
